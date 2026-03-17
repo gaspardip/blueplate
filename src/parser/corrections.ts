@@ -8,12 +8,19 @@ export interface Correction {
   payee?: string;
 }
 
-// Patterns that indicate a correction to the last transaction:
-// "no, 12k" / "wrong, visa" / "actually restaurants" / "it was 15k"
+// Patterns that indicate a correction to the last transaction.
+// Sorted longest-first so "en realidad" matches before "en".
 const CORRECTION_PREFIXES = [
-  "no", "nah", "wrong", "actually", "wait", "oops",
-  "no,", "nah,", "wrong,", "actually,", "wait,", "oops,",
-  "it was", "should be", "meant", "quise decir", "era", "en realidad",
+  // Spanish (longer first)
+  "en realidad", "quise decir", "deberia ser", "debería ser",
+  "no era", "mal,", "mal ", "perdon,", "perdón,",
+  "eran", "fueron", "quisé decir", "era",
+  // English (longer first)
+  "it was", "should be", "i meant", "actually",
+  "wrong,", "wrong ", "wait,", "wait ", "oops,", "oops ",
+  "nah,", "nah ",
+  // Short — must be last (match "no" carefully)
+  "no,", "no ",
 ];
 
 export function parseCorrection(text: string): Correction | null {
