@@ -1,0 +1,233 @@
+import { BlueplateError, LunchMoneyError, ParseError } from "./errors.js";
+import { FXService } from "./fx/index.js";
+import { logger } from "./logger.js";
+import { LunchMoneyService } from "./lunchmoney/index.js";
+import { buildMetadataBlockWithFX, buildMetadataBlock, transactionToPayload } from "./lunchmoney/mapper.js";
+import { parse } from "./parser/index.js";
+import type { BlueplateDatabase } from "./storage/database.js";
+import type { Transaction, ResolutionContext } from "./types.js";
+
+export interface ProcessResult {
+  transaction: Transaction;
+  lmTransactionId: number;
+  fxRate?: number;
+  fxSource?: string;
+  categoryName?: string;
+}
+
+export interface UndoResult {
+  payee: string;
+  amount: number;
+  currency: string;
+}
+
+export class Orchestrator {
+  constructor(
+    private db: BlueplateDatabase,
+    private lm: LunchMoneyService,
+    private fx: FXService,
+    private defaultCurrency: string
+  ) {}
+
+  async process(text: string, chatId: number, messageId: number): Promise<ProcessResult> {
+    const externalId = `bp_${chatId}_${messageId}`;
+
+    // Dedup check
+    const existing = this.db.getByExternalId(externalId);
+    if (existing) {
+      logger.info("Duplicate message, returning cached result", { externalId });
+      return {
+        transaction: {
+          amount: existing.amount,
+          currency: existing.currency,
+          originalAmount: existing.original_amount ?? undefined,
+          originalCurrency: existing.original_currency ?? undefined,
+          payee: existing.payee,
+          categoryName: existing.category_name ?? undefined,
+          date: existing.date,
+          externalId,
+        },
+        lmTransactionId: existing.lm_transaction_id,
+        fxRate: existing.fx_rate ?? undefined,
+        fxSource: existing.fx_source ?? undefined,
+        categoryName: existing.category_name ?? undefined,
+      };
+    }
+
+    // Build resolution context from cached LM data
+    const ctx = await this.getResolutionContext();
+
+    // Parse
+    const parsed = parse(text, ctx);
+    if (!parsed.ok) {
+      if (parsed.error === "ambiguous") {
+        throw new ParseError(parsed.message, parsed.candidates);
+      }
+      throw new ParseError(parsed.message);
+    }
+
+    const { expense } = parsed;
+    const currency = expense.currency ?? this.defaultCurrency;
+    const date = expense.date ?? new Date().toISOString().slice(0, 10);
+
+    // Resolve category
+    let categoryId: number | undefined;
+    let categoryName: string | undefined;
+    if (expense.categoryHint) {
+      const categories = await this.lm.getCategories();
+      const match = categories.find(
+        (c) => c.name.toLowerCase() === expense.categoryHint!.toLowerCase()
+      );
+      if (match) {
+        categoryId = match.id;
+        categoryName = match.name;
+      }
+    }
+
+    // Resolve asset
+    let assetId: number | undefined;
+    let assetName: string | undefined;
+    if (expense.assetHint) {
+      const assets = await this.lm.getAssets();
+      const match = assets.find(
+        (a) =>
+          a.name.toLowerCase() === expense.assetHint!.toLowerCase() ||
+          (a.displayName && a.displayName.toLowerCase() === expense.assetHint!.toLowerCase())
+      );
+      if (match) {
+        assetId = match.id;
+        assetName = match.name;
+      }
+    }
+
+    // FX conversion if ARS
+    let finalAmount = expense.amount;
+    let finalCurrency = currency;
+    let originalAmount: number | undefined;
+    let originalCurrency: string | undefined;
+    let fxRate: number | undefined;
+    let fxSource: string | undefined;
+
+    if (currency.toUpperCase() === "ARS") {
+      const conversion = await this.fx.convert(expense.amount, "ARS", "USD");
+      finalAmount = conversion.convertedAmount;
+      finalCurrency = "USD";
+      originalAmount = expense.amount;
+      originalCurrency = "ARS";
+      fxRate = conversion.rate;
+      fxSource = conversion.source;
+    }
+
+    // Build transaction
+    const tx: Transaction = {
+      amount: finalAmount,
+      currency: finalCurrency,
+      originalAmount,
+      originalCurrency,
+      payee: expense.payee,
+      categoryId,
+      categoryName,
+      assetId,
+      date,
+      tags: expense.tags,
+      externalId,
+    };
+
+    // Build notes with metadata
+    let notes = "";
+    if (expense.note) {
+      notes = expense.note + "\n\n";
+    }
+    if (fxRate && fxSource) {
+      notes += buildMetadataBlockWithFX(tx, fxRate, fxSource);
+    } else {
+      notes += buildMetadataBlock(tx);
+    }
+
+    // Write to Lunch Money
+    const payload = transactionToPayload(tx, notes);
+    const lmId = await this.lm.rawClient.createTransaction(payload);
+
+    // Save undo record
+    this.db.saveTransaction({
+      externalId,
+      lmTransactionId: lmId,
+      telegramChatId: chatId,
+      telegramMessageId: messageId,
+      amount: finalAmount,
+      currency: finalCurrency,
+      originalAmount,
+      originalCurrency,
+      payee: expense.payee,
+      categoryName,
+      assetName,
+      date,
+      fxRate,
+      fxSource,
+    });
+
+    logger.info("Transaction created", { externalId, lmId, amount: finalAmount, currency: finalCurrency });
+
+    return {
+      transaction: tx,
+      lmTransactionId: lmId,
+      fxRate,
+      fxSource,
+      categoryName,
+    };
+  }
+
+  async undo(chatId: number): Promise<UndoResult> {
+    const record = this.db.getLastUndoable(chatId);
+    if (!record) {
+      throw new BlueplateError("Nothing to undo.", "NO_UNDO", false);
+    }
+
+    // Try DELETE first, fall back to mark-as-undone
+    let deleted = false;
+    try {
+      deleted = await this.lm.rawClient.deleteTransaction(record.lm_transaction_id);
+    } catch (error) {
+      if (error instanceof LunchMoneyError && error.statusCode === 404) {
+        // Already deleted or v2 DELETE not available
+        deleted = true;
+      } else {
+        // Fall back to update strategy
+        logger.warn("DELETE failed, falling back to update", { error: String(error) });
+        try {
+          await this.lm.rawClient.updateTransaction(record.lm_transaction_id, {
+            payee: `[UNDONE] ${record.payee}`,
+            amount: "0",
+            status: "uncleared",
+          });
+        } catch (updateError) {
+          throw new LunchMoneyError(`Failed to undo: ${updateError}`);
+        }
+      }
+    }
+
+    this.db.markUndone(record.id);
+    logger.info("Transaction undone", { id: record.id, lmId: record.lm_transaction_id, deleted });
+
+    return {
+      payee: record.payee,
+      amount: record.amount,
+      currency: record.currency,
+    };
+  }
+
+  async getResolutionContext(): Promise<ResolutionContext> {
+    const [categories, assets, tags] = await Promise.all([
+      this.lm.getCategories(),
+      this.lm.getAssets(),
+      this.lm.getTags(),
+    ]);
+
+    return {
+      categories,
+      assets,
+      tags,
+      defaultCurrency: this.defaultCurrency,
+    };
+  }
+}
