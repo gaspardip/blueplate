@@ -189,7 +189,7 @@ export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutc
   return { ok: true, expense };
 }
 
-function fuzzyMatchCategory(input: string, categories: CachedCategory[]): CachedCategory | null {
+export function fuzzyMatchCategory(input: string, categories: CachedCategory[]): CachedCategory | null {
   const lower = input.toLowerCase();
 
   // Check Spanish/shorthand aliases first

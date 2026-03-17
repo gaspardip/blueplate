@@ -8,6 +8,7 @@ import {
   formatCategories,
   formatDaySummary,
   formatMonthSummary,
+  formatUndone,
 } from "./formatters.js";
 
 export function createCommandHandlers(
@@ -36,26 +37,30 @@ export function createCommandHandlers(
     help: async (ctx: Context) => {
       await ctx.reply(
         "Syntax:\n" +
-          "  <payee> <amount> [currency] [category]\n" +
-          "  <amount> [currency] <payee> [category]\n\n" +
+          "  <payee> <amount> [currency] [category] [account]\n\n" +
+          "Amounts: 1500, 15k, 1.5m, $500k\n" +
+          "Income: prefix with - (e.g. -500k)\n" +
+          "Currencies: ars/pesos, usd/dolares, eur/euros\n" +
+          "Accounts: visa, amex, mp (Mercado Pago), banco\n\n" +
           "Modifiers:\n" +
           "  #tag — add a tag\n" +
           "  note:text — add a note\n" +
-          "  date:YYYY-MM-DD — set date\n" +
-          "  yesterday / ayer — set date to yesterday\n\n" +
-          "Currencies: ars/pesos, usd/dolares, eur/euros\n" +
-          "Default currency: ARS (converted to USD via blue rate)\n\n" +
+          "  date:YYYY-MM-DD or ayer/yesterday\n\n" +
+          "Corrections (amend last entry):\n" +
+          "  no, 12k — fix amount\n" +
+          "  wrong, visa — fix account\n" +
+          "  actually restaurants — fix category\n\n" +
+          "Quick undo: react 👎 to any message\n\n" +
           "Examples:\n" +
-          "  café 14500 ars comida\n" +
-          "  uber 12.50 usd\n" +
-          "  pizza 1500 #delivery\n" +
-          "  almuerzo 8500 ayer"
+          "  starbucks 8k cafe mp\n" +
+          "  uber 12.50 usd taxi\n" +
+          "  pizza 15k visa comida\n" +
+          "  sueldo -500k"
       );
     },
 
     undo: async (ctx: Context) => {
       const result = await orchestrator.undo(ctx.chat!.id);
-      const { formatUndone } = await import("./formatters.js");
       await ctx.reply(formatUndone(result.payee, result.amount, result.currency));
     },
 

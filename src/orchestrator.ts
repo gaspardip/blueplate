@@ -191,6 +191,108 @@ export class Orchestrator {
     };
   }
 
+  async amend(chatId: number, corrections: {
+    amount?: number;
+    currency?: string;
+    categoryHint?: string;
+    assetHint?: string;
+    payee?: string;
+  }): Promise<ProcessResult> {
+    const record = this.db.getLastUndoable(chatId);
+    if (!record) {
+      throw new BlueplateError("Nothing to amend.", "NO_AMEND", false);
+    }
+
+    const ctx = await this.getResolutionContext();
+    const updates: Record<string, unknown> = {};
+
+    // Resolve new amount (with FX if needed)
+    let newAmount = record.amount;
+    let newOriginalAmount = record.original_amount;
+    let fxRate = record.fx_rate;
+    let fxSource = record.fx_source;
+
+    if (corrections.amount != null) {
+      const currency = corrections.currency ?? record.original_currency ?? "ARS";
+      if (currency.toUpperCase() === "ARS") {
+        const absAmount = Math.abs(corrections.amount);
+        const sign = corrections.amount < 0 ? -1 : 1;
+        const conversion = await this.fx.convert(absAmount, "ARS", "USD");
+        newAmount = conversion.convertedAmount * sign;
+        newOriginalAmount = corrections.amount;
+        fxRate = conversion.rate;
+        fxSource = conversion.source;
+      } else {
+        newAmount = corrections.amount;
+        newOriginalAmount = null;
+      }
+      updates.amount = newAmount.toFixed(2);
+    }
+
+    // Resolve new category
+    let categoryId: number | undefined;
+    let categoryName = record.category_name ?? undefined;
+    if (corrections.categoryHint) {
+      const { fuzzyMatchCategory } = await import("./parser/grammar.js");
+      const match = fuzzyMatchCategory(corrections.categoryHint, ctx.categories);
+      if (match) {
+        categoryId = match.id;
+        categoryName = match.name;
+        updates.category_id = match.id;
+      }
+    }
+
+    // Resolve new account
+    let assetName = record.asset_name ?? undefined;
+    if (corrections.assetHint) {
+      const assets = ctx.assets;
+      const lower = corrections.assetHint.toLowerCase();
+      const match = assets.find(
+        (a) => a.name.toLowerCase() === lower ||
+          (a.displayName && a.displayName.toLowerCase() === lower)
+      );
+      if (match) {
+        assetName = match.name;
+        updates.manual_account_id = match.id;
+      }
+    }
+
+    // Resolve new payee
+    let payeeName = record.payee;
+    if (corrections.payee) {
+      payeeName = this.payee.normalize(corrections.payee);
+      updates.payee = payeeName;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      throw new BlueplateError("No valid corrections found.", "NO_CORRECTIONS", false);
+    }
+
+    // Update in LM
+    await this.lm.rawClient.updateTransaction(record.lm_transaction_id, updates as any);
+
+    // Update local record (re-save with new values)
+    logger.info("Transaction amended", { lmId: record.lm_transaction_id, updates });
+
+    return {
+      transaction: {
+        amount: newAmount,
+        currency: record.currency,
+        originalAmount: newOriginalAmount ?? undefined,
+        originalCurrency: record.original_currency ?? undefined,
+        payee: payeeName,
+        categoryName,
+        date: record.date,
+        externalId: record.external_id,
+      },
+      lmTransactionId: record.lm_transaction_id,
+      fxRate: fxRate ?? undefined,
+      fxSource: fxSource ?? undefined,
+      categoryName,
+      accountName: assetName,
+    };
+  }
+
   async undo(chatId: number): Promise<UndoResult> {
     const record = this.db.getLastUndoable(chatId);
     if (!record) {

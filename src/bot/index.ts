@@ -5,8 +5,9 @@ import { logger } from "../logger.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { LunchMoneyService } from "../lunchmoney/index.js";
 import type { BlueplateDatabase } from "../storage/database.js";
+import { parseCorrection } from "../parser/corrections.js";
 import { createCommandHandlers } from "./commands.js";
-import { formatConfirmation } from "./formatters.js";
+import { formatConfirmation, formatUndone } from "./formatters.js";
 import { authGuard, errorBoundary, requestLogger } from "./middleware.js";
 
 export function createBot(
@@ -33,12 +34,57 @@ export function createBot(
   bot.command("accounts", commands.accounts);
   bot.command("alias", commands.alias);
 
-  // Free text → expense pipeline
+  // Reactions: ❌ on the bot's confirmation message → undo
+  bot.on("message_reaction", async (ctx) => {
+    const reaction = ctx.messageReaction;
+    if (!reaction) return;
+
+    const chatId = reaction.chat.id;
+    const newReactions = reaction.new_reaction;
+
+    // Check for 👎 or 💩 reaction → undo
+    const isUndo = newReactions.some(
+      (r) => r.type === "emoji" && (r.emoji === "👎" || r.emoji === "💩")
+    );
+
+    if (isUndo) {
+      try {
+        const result = await orchestrator.undo(chatId);
+        await bot.api.sendMessage(chatId, formatUndone(result.payee, result.amount, result.currency));
+      } catch (error) {
+        if (error instanceof BlueplateError) {
+          await bot.api.sendMessage(chatId, error.message);
+        } else {
+          logger.error("Reaction undo failed", { error: String(error) });
+        }
+      }
+    }
+  });
+
+  // Free text — check for correction first, then expense
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text;
     const chatId = ctx.chat.id;
     const messageId = ctx.message.message_id;
 
+    // Try parsing as a correction to the last transaction
+    const correction = parseCorrection(text);
+    if (correction) {
+      try {
+        const result = await orchestrator.amend(chatId, correction);
+        await ctx.reply("Amended:\n" + formatConfirmation(result));
+        return;
+      } catch (error) {
+        if (error instanceof BlueplateError) {
+          // Not a valid correction — fall through to normal processing
+          logger.debug("Correction failed, treating as new expense", { error: error.message });
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    // Normal expense processing
     try {
       const result = await orchestrator.process(text, chatId, messageId);
       await ctx.reply(formatConfirmation(result));
@@ -74,12 +120,11 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
   if (config.mode === "webhook" && config.webhookUrl) {
     logger.info("Starting bot in webhook mode", { url: config.webhookUrl, port: config.webhookPort });
     await bot.api.setWebhook(config.webhookUrl);
-    // For webhook mode, we'd need an HTTP server — grammY has adapters for this
-    // For now, we only fully support polling mode
     logger.warn("Webhook HTTP server not yet implemented — use polling mode");
   } else {
     logger.info("Starting bot in polling mode");
     bot.start({
+      allowed_updates: ["message", "message_reaction"],
       onStart: () => logger.info("Bot is running"),
     });
   }
