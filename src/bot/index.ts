@@ -31,6 +31,7 @@ export function createBot(
   bot.command("month", commands.month);
   bot.command("categories", commands.categories);
   bot.command("accounts", commands.accounts);
+  bot.command("alias", commands.alias);
 
   // Free text → expense pipeline
   bot.on("message:text", async (ctx) => {
@@ -67,6 +68,7 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     { command: "month", description: "This month's summary" },
     { command: "categories", description: "List categories" },
     { command: "accounts", description: "List accounts" },
+    { command: "alias", description: "Set payee alias: /alias starbux Starbucks" },
   ]);
 
   if (config.mode === "webhook" && config.webhookUrl) {

@@ -32,8 +32,7 @@ describe("Orchestrator", () => {
   });
 
   function setupMockFetch(lmResponseId: number = 9876) {
-    let callCount = 0;
-    globalThis.fetch = mock((url: string | URL | Request) => {
+    globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
 
       // DolarAPI blue rate
@@ -53,41 +52,58 @@ describe("Orchestrator", () => {
         );
       }
 
-      // LM create transaction
-      if (urlStr.includes("lunchmoney") && urlStr.includes("/transactions")) {
+      // LM create transaction — v2 returns 201 with full objects
+      if (urlStr.includes("/transactions") && init?.method === "POST") {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ ids: [lmResponseId] }),
+            JSON.stringify({
+              transactions: [{ id: lmResponseId, date: "2026-03-17", payee: "Test", amount: "10.18", currency: "usd" }],
+            }),
+            { status: 201, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+
+      // LM delete transaction — v2 returns 204 No Content
+      if (urlStr.includes("/transactions/") && init?.method === "DELETE") {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+
+      // LM transactions list
+      if (urlStr.includes("/transactions")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ transactions: [] }),
             { status: 200, headers: { "Content-Type": "application/json" } }
           )
         );
       }
 
-      // LM categories
-      if (urlStr.includes("lunchmoney") && urlStr.includes("/categories")) {
+      // LM categories — v2 returns nested by default
+      if (urlStr.includes("/categories")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({ categories: [
-              { id: 1, name: "Comida", is_income: false, archived: false, group_id: null },
-              { id: 2, name: "Transporte", is_income: false, archived: false, group_id: null },
+              { id: 1, name: "Comida", is_income: false, archived: false, is_group: false, group_id: null },
+              { id: 2, name: "Transporte", is_income: false, archived: false, is_group: false, group_id: null },
             ] }),
             { status: 200, headers: { "Content-Type": "application/json" } }
           )
         );
       }
 
-      // LM assets
-      if (urlStr.includes("lunchmoney") && urlStr.includes("/assets")) {
+      // LM manual_accounts — v2 renamed from /assets
+      if (urlStr.includes("/manual_accounts")) {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ assets: [] }),
+            JSON.stringify({ manual_accounts: [] }),
             { status: 200, headers: { "Content-Type": "application/json" } }
           )
         );
       }
 
       // LM tags
-      if (urlStr.includes("lunchmoney") && urlStr.includes("/tags")) {
+      if (urlStr.includes("/tags")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({ tags: [] }),
@@ -112,7 +128,7 @@ describe("Orchestrator", () => {
     expect(result.transaction.currency).toBe("USD");
     expect(result.transaction.originalAmount).toBe(14500);
     expect(result.transaction.originalCurrency).toBe("ARS");
-    expect(result.transaction.payee).toBe("café");
+    expect(result.transaction.payee).toBe("Café");
     expect(result.categoryName).toBe("Comida");
     expect(result.fxRate).toBe(1425);
     expect(result.lmTransactionId).toBe(9876);
@@ -151,40 +167,14 @@ describe("Orchestrator", () => {
 
   it("undoes the last transaction", async () => {
     setupMockFetch();
-
-    // Mock DELETE response
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
-      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
-      if (init?.method === "DELETE") {
-        return Promise.resolve(new Response("{}", { status: 200 }));
-      }
-      return (origFetch as any)(url, init);
-    }) as any;
-
-    // Re-setup with proper mock
-    globalThis.fetch = originalFetch;
-    setupMockFetch();
-
     const fx = new FXService(db, 300);
     const lm = new LunchMoneyService("test-key", db, 3600_000);
     orchestrator = new Orchestrator(db, lm, fx, "ARS");
 
     await orchestrator.process("pizza 8000", 123, 100);
 
-    // Now mock DELETE for undo
-    const afterProcessFetch = globalThis.fetch;
-    globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
-      if (init?.method === "DELETE") {
-        return Promise.resolve(
-          new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })
-        );
-      }
-      return (afterProcessFetch as any)(url, init);
-    }) as any;
-
     const undoResult = await orchestrator.undo(123);
-    expect(undoResult.payee).toBe("pizza");
+    expect(undoResult.payee).toBe("Pizza");
 
     // Verify undone in DB
     const undoable = db.getLastUndoable(123);

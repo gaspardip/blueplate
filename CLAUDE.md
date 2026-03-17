@@ -29,6 +29,29 @@ ARS amounts are converted to USD via the blue dollar rate at ingestion time.
 - **Orchestrator**: Coordinates parse → resolve → enrich → write pipeline.
 - **Bot**: grammY setup, commands, middleware. Depends only on Orchestrator.
 
+## Lunch Money API v2
+
+**IMPORTANT**: This project uses the Lunch Money **v2** API exclusively. Do NOT use v1.
+
+- **Base URL**: `https://api.lunchmoney.dev/v2` (NOT `dev.lunchmoney.app/v1`, NOT `alpha.lunchmoney.dev/v2` which is a sandbox)
+- **Docs**: https://alpha.lunchmoney.dev/v2/docs
+- **Migration guide**: https://alpha.lunchmoney.dev/v2/migration-guide
+
+### Key v2 differences from v1
+
+- `/assets` → `/manual_accounts` (response key: `manual_accounts`)
+- `asset_id` → `manual_account_id` on transactions
+- `tags` (object array) → `tag_ids` (integer array)
+- Status values: `cleared` → `reviewed`, `uncleared` → `unreviewed`
+- POST returns **201** with full objects (not just IDs). Create response: `{ transactions: [...], skipped_duplicates: [...] }`
+- DELETE returns **204 No Content** (not 200 with `true`)
+- PUT sends payload directly (not wrapped in `{ transaction: ... }`)
+- Categories default to nested format (groups have `children` array)
+- Transaction objects are "dehydrated" — no hydrated category/asset names, only IDs
+- The same API key works for both v1 and v2
+- `alpha.lunchmoney.dev/v2` is a sandbox with demo data — do NOT use for prod
+- `api.lunchmoney.dev/v2` is the real v2 endpoint that hits the user's actual budget
+
 ## Conventions
 
 - CalVer versioning (YYYY.M.D)

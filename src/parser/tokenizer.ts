@@ -91,14 +91,16 @@ export function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Amount: digits with optional $ prefix, commas, dots
-    // Match patterns like: 1500, 1.500, 14,500, $1500, 12.50
-    const amountMatch = word.match(/^\$?([\d]+(?:[.,]\d{3})*(?:[.,]\d{1,2})?)$|^\$?([\d]+(?:[.,]\d+)?)$/);
+    // Amount: optional -/$ prefix, digits with commas/dots, k/m suffix
+    // Match: 1500, 1.500, 14,500, $1500, 12.50, 500k, 1.5m, $2M, -7500, -500k
+    const amountMatch = word.match(/^-?\$?([\d]+(?:[.,]\d{3})*(?:[.,]\d{1,2})?[kmKM]?)$|^-?\$?([\d]+(?:[.,]\d+)?[kmKM]?)$/);
     if (amountMatch) {
+      const isNegative = word.startsWith("-");
       const raw = (amountMatch[1] || amountMatch[2] || "").replace(/\$/g, "");
       const parsed = parseAmount(raw);
       if (parsed !== null) {
-        tokens.push({ type: "amount", value: String(parsed), raw: word, position });
+        const value = isNegative ? -parsed : parsed;
+        tokens.push({ type: "amount", value: String(value), raw: word, position });
         position++;
         continue;
       }
@@ -122,50 +124,58 @@ export function tokenize(input: string): Token[] {
 function parseAmount(raw: string): number | null {
   if (!raw) return null;
 
+  // Extract and apply k/m suffix multiplier
+  let multiplier = 1;
+  let numStr = raw;
+  const lastChar = raw.slice(-1).toLowerCase();
+  if (lastChar === "k") {
+    multiplier = 1_000;
+    numStr = raw.slice(0, -1);
+  } else if (lastChar === "m") {
+    multiplier = 1_000_000;
+    numStr = raw.slice(0, -1);
+  }
+
+  if (!numStr) return null;
+
   // Determine if comma or dot is the decimal separator
   // "1.500" → 1500 (thousand separator), "1.50" → 1.50 (decimal)
   // "1,500" → 1500 (thousand separator), "1,50" → 1.50 (decimal)
-  const dotParts = raw.split(".");
-  const commaParts = raw.split(",");
+  const dotParts = numStr.split(".");
+  const commaParts = numStr.split(",");
 
   let normalized: string;
 
   if (dotParts.length === 2 && commaParts.length === 1) {
-    // Only dots: check if decimal (1-2 digits after) or thousand (3 digits after)
-    if (dotParts[1].length <= 2) {
-      normalized = raw; // decimal point
+    // Only dots: if multiplier is set, always treat as decimal (1.5k = 1500)
+    if (multiplier > 1 || dotParts[1].length <= 2) {
+      normalized = numStr; // decimal point
     } else {
-      normalized = raw.replace(/\./g, ""); // thousand separator
+      normalized = numStr.replace(/\./g, ""); // thousand separator
     }
   } else if (commaParts.length === 2 && dotParts.length === 1) {
-    // Only commas: check if decimal (1-2 digits after) or thousand (3 digits after)
-    if (commaParts[1].length <= 2) {
-      normalized = raw.replace(",", "."); // decimal comma
+    if (multiplier > 1 || commaParts[1].length <= 2) {
+      normalized = numStr.replace(",", "."); // decimal comma
     } else {
-      normalized = raw.replace(/,/g, ""); // thousand separator
+      normalized = numStr.replace(/,/g, ""); // thousand separator
     }
   } else if (dotParts.length > 2) {
-    // Multiple dots: thousand separators (e.g., 1.234.567)
-    normalized = raw.replace(/\./g, "");
+    normalized = numStr.replace(/\./g, "");
   } else if (commaParts.length > 2) {
-    // Multiple commas: thousand separators
-    normalized = raw.replace(/,/g, "");
+    normalized = numStr.replace(/,/g, "");
   } else if (dotParts.length === 2 && commaParts.length === 2) {
-    // Both dot and comma present
-    const dotPos = raw.lastIndexOf(".");
-    const commaPos = raw.lastIndexOf(",");
+    const dotPos = numStr.lastIndexOf(".");
+    const commaPos = numStr.lastIndexOf(",");
     if (dotPos > commaPos) {
-      // 1,234.56 — comma is thousand, dot is decimal
-      normalized = raw.replace(/,/g, "");
+      normalized = numStr.replace(/,/g, "");
     } else {
-      // 1.234,56 — dot is thousand, comma is decimal
-      normalized = raw.replace(/\./g, "").replace(",", ".");
+      normalized = numStr.replace(/\./g, "").replace(",", ".");
     }
   } else {
-    normalized = raw;
+    normalized = numStr;
   }
 
-  const num = Number(normalized);
+  const num = Number(normalized) * multiplier;
   return isNaN(num) || num <= 0 ? null : num;
 }
 

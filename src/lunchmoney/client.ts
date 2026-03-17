@@ -1,7 +1,7 @@
 import { LunchMoneyError } from "../errors.js";
 import { logger } from "../logger.js";
 import type {
-  LMAssetsResponse,
+  LMManualAccountsResponse,
   LMCategoriesResponse,
   LMCreateResponse,
   LMCreateTransactionPayload,
@@ -10,12 +10,18 @@ import type {
   LMUpdateTransactionPayload,
 } from "./types.js";
 
-const LM_API_BASE = "https://dev.lunchmoney.app/v2";
+// v2 API — see https://alpha.lunchmoney.dev/v2/migration-guide
+const LM_API_BASE = "https://api.lunchmoney.dev/v2";
 
 export class LunchMoneyClient {
   constructor(private apiKey: string) {}
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    expectNoContent = false
+  ): Promise<T> {
     const url = `${LM_API_BASE}${path}`;
     logger.debug("LM API request", { method, path });
 
@@ -27,6 +33,11 @@ export class LunchMoneyClient {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+
+    // v2: DELETE returns 204 No Content
+    if (expectNoContent && resp.status === 204) {
+      return undefined as T;
+    }
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
@@ -45,25 +56,32 @@ export class LunchMoneyClient {
   }
 
   async createTransaction(payload: LMCreateTransactionPayload): Promise<number> {
+    // v2: POST returns 201 with full transaction objects
     const data = await this.request<LMCreateResponse>("POST", "/transactions", {
       transactions: [payload],
       skip_duplicates: true,
     });
 
-    if (!data.ids || data.ids.length === 0) {
-      throw new LunchMoneyError("No transaction ID returned — possible duplicate");
+    if (data.transactions && data.transactions.length > 0) {
+      return data.transactions[0].id;
     }
 
-    return data.ids[0];
+    // Check if it was a skipped duplicate
+    if (data.skipped_duplicates && data.skipped_duplicates.length > 0) {
+      return data.skipped_duplicates[0].existing_transaction_id;
+    }
+
+    throw new LunchMoneyError("No transaction returned from create");
   }
 
   async updateTransaction(id: number, payload: LMUpdateTransactionPayload): Promise<void> {
-    await this.request("PUT", `/transactions/${id}`, { transaction: payload });
+    await this.request("PUT", `/transactions/${id}`, payload);
   }
 
   async deleteTransaction(id: number): Promise<boolean> {
     try {
-      await this.request("DELETE", `/transactions/${id}`);
+      // v2: DELETE returns 204 No Content
+      await this.request("DELETE", `/transactions/${id}`, undefined, true);
       return true;
     } catch (error) {
       if (error instanceof LunchMoneyError && error.statusCode === 404) {
@@ -77,18 +95,19 @@ export class LunchMoneyClient {
     return this.request<LMCategoriesResponse>("GET", "/categories");
   }
 
-  async getAssets(): Promise<LMAssetsResponse> {
-    return this.request<LMAssetsResponse>("GET", "/assets");
+  async getManualAccounts(): Promise<LMManualAccountsResponse> {
+    // v2: /assets renamed to /manual_accounts
+    return this.request<LMManualAccountsResponse>("GET", "/manual_accounts");
   }
 
   async getTags(): Promise<LMTagsResponse> {
     return this.request<LMTagsResponse>("GET", "/tags");
   }
 
-  async getTransactions(startDate: string, endDate: string): Promise<LMTransactionsResponse> {
+  async getTransactions(startDate: string, endDate: string, includeMetadata = true): Promise<LMTransactionsResponse> {
     return this.request<LMTransactionsResponse>(
       "GET",
-      `/transactions?start_date=${startDate}&end_date=${endDate}`
+      `/transactions?start_date=${startDate}&end_date=${endDate}&include_metadata=${includeMetadata}`
     );
   }
 }

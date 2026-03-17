@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS user_defaults (
   default_asset_id INTEGER,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS payee_aliases (
+  alias TEXT PRIMARY KEY,
+  canonical TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 export class BlueplateDatabase {
@@ -255,6 +261,34 @@ export class BlueplateDatabase {
         )
         .get(pair) ?? null
     );
+  }
+
+  // --- Payee Aliases ---
+
+  getPayeeAlias(alias: string): string | null {
+    const row = this.db
+      .query<{ canonical: string }, [string]>(
+        "SELECT canonical FROM payee_aliases WHERE alias = ?"
+      )
+      .get(alias.toLowerCase());
+    return row?.canonical ?? null;
+  }
+
+  setPayeeAlias(alias: string, canonical: string): void {
+    this.db
+      .query(
+        "INSERT OR REPLACE INTO payee_aliases (alias, canonical) VALUES (?, ?)"
+      )
+      .run(alias.toLowerCase(), canonical);
+  }
+
+  getDistinctPayees(): string[] {
+    const rows = this.db
+      .query<{ payee: string }, []>(
+        "SELECT DISTINCT payee FROM transactions WHERE undone = 0 ORDER BY payee"
+      )
+      .all();
+    return rows.map((r) => r.payee);
   }
 }
 

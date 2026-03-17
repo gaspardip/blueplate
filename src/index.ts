@@ -23,7 +23,7 @@ async function main() {
 
   // Pre-warm LM metadata cache
   try {
-    await Promise.all([lm.getCategories(), lm.getAssets(), lm.getTags()]);
+    await Promise.all([lm.getCategories(), lm.getAccounts(), lm.getTags()]);
     logger.info("LM metadata cache warmed");
   } catch (error) {
     logger.warn("Failed to warm LM cache — will retry on first use", { error: String(error) });

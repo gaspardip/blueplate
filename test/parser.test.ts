@@ -4,14 +4,19 @@ import type { ResolutionContext } from "../src/types.js";
 
 const ctx: ResolutionContext = {
   categories: [
-    { id: 1, name: "Comida", isIncome: false, archived: false },
-    { id: 2, name: "Transporte", isIncome: false, archived: false },
-    { id: 3, name: "Entretenimiento", isIncome: false, archived: false },
-    { id: 4, name: "Servicios", isIncome: false, archived: false },
+    { id: 1, name: "🍽️ Restaurants", isIncome: false, archived: false },
+    { id: 2, name: "🚕 Rideshare, Taxi", isIncome: false, archived: false },
+    { id: 3, name: "☕ Coffee Shops", isIncome: false, archived: false },
+    { id: 4, name: "🛒 Groceries", isIncome: false, archived: false },
+    { id: 5, name: "💵 Rent, Mortgage", isIncome: false, archived: false },
+    { id: 6, name: "📺 Streaming Services", isIncome: false, archived: false },
   ],
   assets: [
-    { id: 10, name: "Efectivo", currency: "ARS" },
-    { id: 11, name: "BBVA", displayName: "BBVA Cuenta", currency: "ARS" },
+    { id: 10, name: "Mercado Pago", currency: "ARS" },
+    { id: 11, name: "Cash ARS", currency: "ARS" },
+    { id: 12, name: "Visa", currency: "ARS" },
+    { id: 13, name: "Amex", currency: "ARS" },
+    { id: 14, name: "Banco", currency: "ARS" },
   ],
   tags: [],
   defaultCurrency: "ARS",
@@ -77,27 +82,68 @@ describe("parser", () => {
   });
 
   describe("category matching", () => {
-    it("matches exact category", () => {
-      const result = parse("pizza 1500 comida", ctx);
+    it("matches category ignoring emoji prefix", () => {
+      const result = parse("pizza 1500 restaurants", ctx);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.expense.payee).toBe("pizza");
-      expect(result.expense.categoryHint).toBe("Comida");
+      expect(result.expense.categoryHint).toBe("🍽️ Restaurants");
     });
 
-    it("matches category prefix", () => {
-      const result = parse("pizza 1500 com", ctx);
+    it("matches category by prefix", () => {
+      const result = parse("pizza 1500 rest", ctx);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.expense.categoryHint).toBe("Comida");
+      expect(result.expense.categoryHint).toBe("🍽️ Restaurants");
+    });
+
+    it("matches multi-word category", () => {
+      const result = parse("netflix 15 usd streaming services", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.payee).toBe("netflix");
+      expect(result.expense.categoryHint).toBe("📺 Streaming Services");
+    });
+
+    it("matches category by contains", () => {
+      const result = parse("uber 5k taxi", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.categoryHint).toBe("🚕 Rideshare, Taxi");
     });
 
     it("multi-word payee with category", () => {
-      const result = parse("café de la esquina 14500 comida", ctx);
+      const result = parse("café de la esquina 14500 coffee", ctx);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.expense.payee).toBe("café de la esquina");
-      expect(result.expense.categoryHint).toBe("Comida");
+      expect(result.expense.categoryHint).toBe("☕ Coffee Shops");
+    });
+  });
+
+  describe("account matching", () => {
+    it("matches account by name", () => {
+      const result = parse("pizza 1500 visa", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.payee).toBe("pizza");
+      expect(result.expense.assetHint).toBe("Visa");
+    });
+
+    it("matches account by initials (mp → Mercado Pago)", () => {
+      const result = parse("pizza 1500 mp", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.assetHint).toBe("Mercado Pago");
+    });
+
+    it("matches account and category together", () => {
+      const result = parse("pizza 15k visa restaurants", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.payee).toBe("pizza");
+      expect(result.expense.assetHint).toBe("Visa");
+      expect(result.expense.categoryHint).toBe("🍽️ Restaurants");
     });
   });
 
@@ -128,6 +174,48 @@ describe("parser", () => {
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.expense.amount).toBe(1500);
+    });
+
+    it("handles k suffix (thousands)", () => {
+      const result = parse("alquiler 500k", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(500_000);
+    });
+
+    it("handles K suffix uppercase", () => {
+      const result = parse("alquiler 500K", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(500_000);
+    });
+
+    it("handles m suffix (millions)", () => {
+      const result = parse("auto 1m", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(1_000_000);
+    });
+
+    it("handles decimal with k suffix", () => {
+      const result = parse("supermercado 14.5k", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(14_500);
+    });
+
+    it("handles decimal with m suffix", () => {
+      const result = parse("depto 1.5m", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(1_500_000);
+    });
+
+    it("handles $500k combo", () => {
+      const result = parse("expensas $500k", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(500_000);
     });
   });
 
@@ -162,6 +250,31 @@ describe("parser", () => {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
       expect(result.expense.date).toBe(yesterday.toISOString().slice(0, 10));
+    });
+  });
+
+  describe("income (negative amounts)", () => {
+    it("parses negative amount as income", () => {
+      const result = parse("freelance -7500 usd", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(-7500);
+      expect(result.expense.payee).toBe("freelance");
+      expect(result.expense.currency).toBe("USD");
+    });
+
+    it("parses negative with k suffix", () => {
+      const result = parse("sueldo -500k", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(-500_000);
+    });
+
+    it("parses negative with dollar sign", () => {
+      const result = parse("refund -$50 usd", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(-50);
     });
   });
 

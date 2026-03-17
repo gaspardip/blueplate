@@ -1,6 +1,7 @@
 import type { Context } from "grammy";
 import type { Orchestrator } from "../orchestrator.js";
 import type { LunchMoneyService } from "../lunchmoney/index.js";
+import { PayeeNormalizer } from "../payee.js";
 import type { BlueplateDatabase } from "../storage/database.js";
 import {
   formatAssets,
@@ -78,8 +79,22 @@ export function createCommandHandlers(
     },
 
     accounts: async (ctx: Context) => {
-      const assets = await lm.getAssets(true);
+      const assets = await lm.getAccounts(true);
       await ctx.reply(formatAssets(assets));
+    },
+
+    alias: async (ctx: Context) => {
+      const text = ctx.message?.text ?? "";
+      const parts = text.replace(/^\/alias\s*/, "").trim().split(/\s+/);
+      if (parts.length < 2) {
+        await ctx.reply("Usage: /alias <variant> <canonical>\nExample: /alias starbux Starbucks");
+        return;
+      }
+      const alias = parts[0];
+      const canonical = parts.slice(1).join(" ");
+      const normalizer = new PayeeNormalizer(db);
+      normalizer.setAlias(alias, canonical);
+      await ctx.reply(`Alias set: "${alias}" → "${canonical}"`);
     },
   };
 }

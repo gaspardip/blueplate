@@ -2,6 +2,7 @@ import { logger } from "../logger.js";
 import type { BlueplateDatabase } from "../storage/database.js";
 import type { CachedAsset, CachedCategory, CachedTag } from "../types.js";
 import { LunchMoneyClient } from "./client.js";
+import type { LMCategory } from "./types.js";
 
 export class LunchMoneyService {
   private client: LunchMoneyClient;
@@ -36,7 +37,11 @@ export class LunchMoneyService {
 
     logger.info("Refreshing LM categories");
     const resp = await this.client.getCategories();
-    const categories = resp.categories.map((c) => ({
+
+    // v2 returns nested categories by default — flatten them
+    const flat = flattenCategories(resp.categories);
+
+    const categories = flat.map((c) => ({
       id: c.id,
       name: c.name,
       isIncome: c.is_income,
@@ -46,7 +51,7 @@ export class LunchMoneyService {
     return categories.filter((c) => !c.archived);
   }
 
-  async getAssets(forceRefresh = false): Promise<CachedAsset[]> {
+  async getAccounts(forceRefresh = false): Promise<CachedAsset[]> {
     if (!forceRefresh) {
       const fetchedAt = this.db.getAssetsFetchedAt();
       if (fetchedAt && Date.now() - new Date(fetchedAt).getTime() < this.metadataCacheTtlMs) {
@@ -62,16 +67,17 @@ export class LunchMoneyService {
       }
     }
 
-    logger.info("Refreshing LM assets");
-    const resp = await this.client.getAssets();
-    const assets = resp.assets.map((a) => ({
+    logger.info("Refreshing LM accounts");
+    // v2: /assets → /manual_accounts
+    const resp = await this.client.getManualAccounts();
+    const accounts = resp.manual_accounts.map((a) => ({
       id: a.id,
       name: a.name,
       displayName: a.display_name ?? undefined,
       currency: a.currency,
     }));
-    this.db.upsertAssets(assets);
-    return assets;
+    this.db.upsertAssets(accounts);
+    return accounts;
   }
 
   async getTags(forceRefresh = false): Promise<CachedTag[]> {
@@ -84,10 +90,25 @@ export class LunchMoneyService {
 
     logger.info("Refreshing LM tags");
     const resp = await this.client.getTags();
-    const tags = (resp.tags ?? []).map((t) => ({ id: t.id, name: t.name }));
+    const tags = resp.tags.map((t) => ({ id: t.id, name: t.name }));
     this.db.upsertTags(tags);
     return tags;
   }
+}
+
+function flattenCategories(categories: LMCategory[]): LMCategory[] {
+  const result: LMCategory[] = [];
+  for (const cat of categories) {
+    // Add the category itself (skip groups — they're containers, not assignable)
+    if (!cat.is_group) {
+      result.push(cat);
+    }
+    // Add children
+    if (cat.children && cat.children.length > 0) {
+      result.push(...cat.children);
+    }
+  }
+  return result;
 }
 
 export { LunchMoneyClient } from "./client.js";

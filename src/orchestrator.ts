@@ -2,7 +2,9 @@ import { BlueplateError, LunchMoneyError, ParseError } from "./errors.js";
 import { FXService } from "./fx/index.js";
 import { logger } from "./logger.js";
 import { LunchMoneyService } from "./lunchmoney/index.js";
-import { buildMetadataBlockWithFX, buildMetadataBlock, transactionToPayload } from "./lunchmoney/mapper.js";
+import { buildMetadata, transactionToPayload } from "./lunchmoney/mapper.js";
+import { PayeeNormalizer } from "./payee.js";
+import { inferTagNames, resolveTagIds } from "./tagger.js";
 import { parse } from "./parser/index.js";
 import type { BlueplateDatabase } from "./storage/database.js";
 import type { Transaction, ResolutionContext } from "./types.js";
@@ -13,6 +15,8 @@ export interface ProcessResult {
   fxRate?: number;
   fxSource?: string;
   categoryName?: string;
+  accountName?: string;
+  autoTags?: string[];
 }
 
 export interface UndoResult {
@@ -22,12 +26,16 @@ export interface UndoResult {
 }
 
 export class Orchestrator {
+  private payee: PayeeNormalizer;
+
   constructor(
     private db: BlueplateDatabase,
     private lm: LunchMoneyService,
     private fx: FXService,
     private defaultCurrency: string
-  ) {}
+  ) {
+    this.payee = new PayeeNormalizer(db);
+  }
 
   async process(text: string, chatId: number, messageId: number): Promise<ProcessResult> {
     const externalId = `bp_${chatId}_${messageId}`;
@@ -70,6 +78,9 @@ export class Orchestrator {
     const currency = expense.currency ?? this.defaultCurrency;
     const date = expense.date ?? new Date().toISOString().slice(0, 10);
 
+    // Normalize payee (fuzzy dedup + casing)
+    const normalizedPayee = this.payee.normalize(expense.payee);
+
     // Resolve category
     let categoryId: number | undefined;
     let categoryName: string | undefined;
@@ -88,7 +99,7 @@ export class Orchestrator {
     let assetId: number | undefined;
     let assetName: string | undefined;
     if (expense.assetHint) {
-      const assets = await this.lm.getAssets();
+      const assets = await this.lm.getAccounts();
       const match = assets.find(
         (a) =>
           a.name.toLowerCase() === expense.assetHint!.toLowerCase() ||
@@ -109,8 +120,10 @@ export class Orchestrator {
     let fxSource: string | undefined;
 
     if (currency.toUpperCase() === "ARS") {
-      const conversion = await this.fx.convert(expense.amount, "ARS", "USD");
-      finalAmount = conversion.convertedAmount;
+      const absAmount = Math.abs(expense.amount);
+      const sign = expense.amount < 0 ? -1 : 1;
+      const conversion = await this.fx.convert(absAmount, "ARS", "USD");
+      finalAmount = conversion.convertedAmount * sign;
       finalCurrency = "USD";
       originalAmount = expense.amount;
       originalCurrency = "ARS";
@@ -118,34 +131,33 @@ export class Orchestrator {
       fxSource = conversion.source;
     }
 
+    // Resolve tags: auto-inferred from category + manual #tags from message
+    const autoTagNames = inferTagNames(categoryName);
+    const allTagNames = [...new Set([...autoTagNames, ...expense.tags])];
+    const tags = await this.lm.getTags();
+    const tagIds = resolveTagIds(allTagNames, tags);
+
     // Build transaction
     const tx: Transaction = {
       amount: finalAmount,
       currency: finalCurrency,
       originalAmount,
       originalCurrency,
-      payee: expense.payee,
+      payee: normalizedPayee,
       categoryId,
       categoryName,
       assetId,
       date,
-      tags: expense.tags,
+      tags: allTagNames,
       externalId,
     };
 
-    // Build notes with metadata
-    let notes = "";
-    if (expense.note) {
-      notes = expense.note + "\n\n";
+    // Build custom_metadata and payload
+    const metadata = buildMetadata(tx, chatId, messageId, fxRate, fxSource);
+    const payload = transactionToPayload(tx, metadata, expense.note);
+    if (tagIds.length > 0) {
+      payload.tag_ids = tagIds;
     }
-    if (fxRate && fxSource) {
-      notes += buildMetadataBlockWithFX(tx, fxRate, fxSource);
-    } else {
-      notes += buildMetadataBlock(tx);
-    }
-
-    // Write to Lunch Money
-    const payload = transactionToPayload(tx, notes);
     const lmId = await this.lm.rawClient.createTransaction(payload);
 
     // Save undo record
@@ -158,7 +170,7 @@ export class Orchestrator {
       currency: finalCurrency,
       originalAmount,
       originalCurrency,
-      payee: expense.payee,
+      payee: normalizedPayee,
       categoryName,
       assetName,
       date,
@@ -174,6 +186,8 @@ export class Orchestrator {
       fxRate,
       fxSource,
       categoryName,
+      accountName: assetName,
+      autoTags: allTagNames.length > 0 ? allTagNames : undefined,
     };
   }
 
@@ -198,7 +212,7 @@ export class Orchestrator {
           await this.lm.rawClient.updateTransaction(record.lm_transaction_id, {
             payee: `[UNDONE] ${record.payee}`,
             amount: "0",
-            status: "uncleared",
+            status: "unreviewed",
           });
         } catch (updateError) {
           throw new LunchMoneyError(`Failed to undo: ${updateError}`);
@@ -219,7 +233,7 @@ export class Orchestrator {
   async getResolutionContext(): Promise<ResolutionContext> {
     const [categories, assets, tags] = await Promise.all([
       this.lm.getCategories(),
-      this.lm.getAssets(),
+      this.lm.getAccounts(),
       this.lm.getTags(),
     ]);
 

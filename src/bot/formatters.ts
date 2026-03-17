@@ -2,24 +2,28 @@ import type { TransactionRow } from "../storage/database.js";
 import type { ProcessResult } from "../orchestrator.js";
 
 export function formatConfirmation(result: ProcessResult): string {
-  const { transaction: tx, fxRate, categoryName } = result;
-  const payee = capitalize(tx.payee);
+  const { transaction: tx, fxRate, categoryName, accountName, autoTags } = result;
+  const isIncome = tx.amount < 0;
+  const absAmount = Math.abs(tx.amount);
 
-  let msg = `${payee} $${tx.amount.toFixed(2)} ${tx.currency}`;
-
+  // Amount line
+  const sign = isIncome ? "+" : "";
+  let line1 = `${tx.payee} — ${sign}$${absAmount.toFixed(2)} ${tx.currency}`;
   if (tx.originalAmount != null && tx.originalCurrency && fxRate) {
-    msg += ` (${tx.originalCurrency} ${formatNumber(tx.originalAmount)} @ ${formatNumber(fxRate)})`;
+    const absOriginal = Math.abs(tx.originalAmount);
+    line1 += `\n${tx.originalCurrency} ${formatNumber(absOriginal)} @ ${formatNumber(fxRate)}`;
   }
 
-  if (categoryName) {
-    msg += ` → ${categoryName}`;
-  }
+  const details: string[] = [];
+  if (categoryName) details.push(`Category: ${categoryName}`);
+  if (accountName) details.push(`Account: ${accountName}`);
+  if (autoTags && autoTags.length > 0) details.push(`Tags: ${autoTags.map((t) => `#${t}`).join(" ")}`);
+  if (tx.date) details.push(`Date: ${tx.date}`);
 
-  if (tx.tags && tx.tags.length > 0) {
-    msg += ` ${tx.tags.map((t) => `#${t}`).join(" ")}`;
+  if (details.length > 0) {
+    return line1 + "\n" + details.join("\n");
   }
-
-  return msg;
+  return line1;
 }
 
 export function formatUndone(payee: string, amount: number, currency: string): string {
