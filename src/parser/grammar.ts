@@ -29,6 +29,7 @@ const CATEGORY_ALIASES: Record<string, string[]> = {
   "verdulería": ["groceries"],
   "almacen": ["groceries"],
   "almacén": ["groceries"],
+  "compras": ["groceries"],
   "delivery": ["food delivery"],
   "pedido": ["food delivery"],
   // Transportation
