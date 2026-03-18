@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   lm_transaction_id INTEGER NOT NULL,
   telegram_chat_id INTEGER NOT NULL,
   telegram_message_id INTEGER NOT NULL,
+  bot_reply_message_id INTEGER,
   amount REAL NOT NULL,
   currency TEXT NOT NULL,
   original_amount REAL,
@@ -82,6 +83,14 @@ export class BlueplateDatabase {
     db.run("PRAGMA journal_mode = WAL");
     db.run("PRAGMA foreign_keys = ON");
     db.run(SCHEMA_SQL);
+
+    // Migration: add bot_reply_message_id if missing (for existing DBs)
+    try {
+      db.run("ALTER TABLE transactions ADD COLUMN bot_reply_message_id INTEGER");
+    } catch {
+      // Column already exists
+    }
+
     return new BlueplateDatabase(db);
   }
 
@@ -151,6 +160,30 @@ export class BlueplateDatabase {
         )
         .get(chatId) ?? null
     );
+  }
+
+  getById(id: number): TransactionRow | null {
+    return (
+      this.db
+        .query<TransactionRow, [number]>("SELECT * FROM transactions WHERE id = ? AND undone = 0")
+        .get(id) ?? null
+    );
+  }
+
+  getByBotReplyMessageId(chatId: number, botReplyMessageId: number): TransactionRow | null {
+    return (
+      this.db
+        .query<TransactionRow, [number, number]>(
+          "SELECT * FROM transactions WHERE telegram_chat_id = ? AND bot_reply_message_id = ? AND undone = 0"
+        )
+        .get(chatId, botReplyMessageId) ?? null
+    );
+  }
+
+  setBotReplyMessageId(id: number, botReplyMessageId: number): void {
+    this.db
+      .query("UPDATE transactions SET bot_reply_message_id = ? WHERE id = ?")
+      .run(botReplyMessageId, id);
   }
 
   markUndone(id: number): void {
@@ -299,6 +332,7 @@ export interface TransactionRow {
   lm_transaction_id: number;
   telegram_chat_id: number;
   telegram_message_id: number;
+  bot_reply_message_id: number | null;
   amount: number;
   currency: string;
   original_amount: number | null;

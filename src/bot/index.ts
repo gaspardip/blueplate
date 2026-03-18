@@ -5,7 +5,7 @@ import { logger } from "../logger.js";
 import type { Orchestrator } from "../orchestrator.js";
 import type { LunchMoneyService } from "../lunchmoney/index.js";
 import type { BlueplateDatabase } from "../storage/database.js";
-import { parseCorrection } from "../parser/corrections.js";
+import { parseCorrection, parseCorrectionLoose } from "../parser/corrections.js";
 import { createCommandHandlers } from "./commands.js";
 import { formatConfirmation, formatUndone } from "./formatters.js";
 import { authGuard, errorBoundary, requestLogger } from "./middleware.js";
@@ -61,18 +61,45 @@ export function createBot(
     }
   });
 
-  // Free text — check for correction first, then expense
+  // Free text — check for reply-to-receipt, correction, then expense
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text;
     const chatId = ctx.chat.id;
     const messageId = ctx.message.message_id;
+
+    // Check if replying to a bot receipt → amend that specific transaction
+    const replyTo = ctx.message.reply_to_message;
+    if (replyTo && replyTo.from?.id === bot.botInfo.id) {
+      const record = db.getByBotReplyMessageId(chatId, replyTo.message_id);
+      if (record) {
+        const correction = parseCorrection(text) ?? parseCorrectionLoose(text);
+        if (correction) {
+          try {
+            const result = await orchestrator.amend(chatId, correction, record.id);
+            const reply = await ctx.reply("Amended:\n" + formatConfirmation(result));
+            db.setBotReplyMessageId(record.id, reply.message_id);
+            return;
+          } catch (error) {
+            if (error instanceof BlueplateError) {
+              await ctx.reply(error.message);
+              return;
+            }
+            throw error;
+          }
+        }
+      }
+    }
 
     // Try parsing as a correction to the last transaction
     const correction = parseCorrection(text);
     if (correction) {
       try {
         const result = await orchestrator.amend(chatId, correction);
-        await ctx.reply("Amended:\n" + formatConfirmation(result));
+        const reply = await ctx.reply("Amended:\n" + formatConfirmation(result));
+        const lastRecord = db.getLastUndoable(chatId);
+        if (lastRecord) {
+          db.setBotReplyMessageId(lastRecord.id, reply.message_id);
+        }
         return;
       } catch (error) {
         if (error instanceof BlueplateError) {
@@ -87,7 +114,12 @@ export function createBot(
     // Normal expense processing
     try {
       const result = await orchestrator.process(text, chatId, messageId);
-      await ctx.reply(formatConfirmation(result));
+      const reply = await ctx.reply(formatConfirmation(result));
+      // Store the bot's reply message ID for future reply-based edits
+      const record = db.getByExternalId(`bp_${chatId}_${messageId}`);
+      if (record) {
+        db.setBotReplyMessageId(record.id, reply.message_id);
+      }
     } catch (error) {
       if (error instanceof ParseError) {
         await ctx.reply(error.message);

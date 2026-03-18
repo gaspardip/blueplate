@@ -197,8 +197,14 @@ export class Orchestrator {
     categoryHint?: string;
     assetHint?: string;
     payee?: string;
-  }): Promise<ProcessResult> {
-    const record = this.db.getLastUndoable(chatId);
+  }, targetRecordId?: number): Promise<ProcessResult> {
+    let record;
+    if (targetRecordId != null) {
+      record = this.db.getById(targetRecordId);
+    }
+    if (!record) {
+      record = this.db.getLastUndoable(chatId);
+    }
     if (!record) {
       throw new BlueplateError("Nothing to amend.", "NO_AMEND", false);
     }

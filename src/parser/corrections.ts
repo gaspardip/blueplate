@@ -67,3 +67,36 @@ export function parseCorrection(text: string): Correction | null {
 
   return hasAnything ? correction : null;
 }
+
+/**
+ * Parse a correction without requiring a prefix — used when replying to a receipt.
+ * Bare text like "12k", "visa", or "restaurants" is treated as a correction.
+ */
+export function parseCorrectionLoose(text: string): Correction | null {
+  const body = text.trim();
+  if (!body) return null;
+
+  const tokens = tokenize(body);
+  const correction: Correction = {};
+  let hasAnything = false;
+
+  for (const token of tokens) {
+    if (token.type === "amount" && correction.amount == null) {
+      correction.amount = Number(token.value);
+      hasAnything = true;
+    } else if (token.type === "currency" && correction.currency == null) {
+      correction.currency = token.value;
+      hasAnything = true;
+    } else if (token.type === "text") {
+      if (!correction.categoryHint) {
+        correction.categoryHint = token.value;
+        hasAnything = true;
+      } else if (!correction.assetHint) {
+        correction.assetHint = token.value;
+        hasAnything = true;
+      }
+    }
+  }
+
+  return hasAnything ? correction : null;
+}
