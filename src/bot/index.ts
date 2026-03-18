@@ -128,17 +128,24 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     await bot.api.deleteWebhook({ drop_pending_updates: true });
 
     bot.catch((err) => {
-      const is409 = err.error instanceof Error && "error_code" in err.error && (err.error as any).error_code === 409;
-      if (is409) {
-        logger.warn("Polling conflict (409) — another instance is running, retrying...");
-        return;
-      }
       logger.error("Bot error", { error: String(err.error) });
     });
 
-    bot.start({
-      allowed_updates: ["message", "message_reaction"],
-      onStart: () => logger.info("Bot is running"),
-    });
+    // Retry polling on 409 (happens during rolling updates when two containers overlap)
+    const startPolling = () => {
+      bot.start({
+        allowed_updates: ["message", "message_reaction"],
+        onStart: () => logger.info("Bot is running"),
+      }).catch((err) => {
+        if (String(err).includes("409")) {
+          logger.warn("Polling conflict (409), retrying in 5s...");
+          setTimeout(startPolling, 5000);
+        } else {
+          logger.error("Fatal polling error", { error: String(err) });
+          process.exit(1);
+        }
+      });
+    };
+    startPolling();
   }
 }
