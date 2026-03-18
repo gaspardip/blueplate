@@ -90,6 +90,18 @@ const CATEGORY_ALIASES: Record<string, string[]> = {
   "contador": ["professional services"],
   "abogado": ["professional services"],
   "profesional": ["professional services"],
+  // Household
+  "casa": ["household"],
+  "hogar": ["household"],
+  "empleada": ["household"],
+  "limpieza": ["household"],
+  "domestica": ["household"],
+  "doméstica": ["household"],
+  // Loans & Transfers
+  "prestamo": ["loans"],
+  "préstamo": ["loans"],
+  "deuda": ["loans"],
+  "preste": ["loans"],
 };
 
 export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutcome {
