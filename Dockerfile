@@ -14,8 +14,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY src ./src
 COPY package.json tsconfig.json ./
 
-# Create data dir and run as non-root
-RUN mkdir -p /app/data && chown -R bun:bun /app
+# Install curl for health checks and create data dir
+RUN apk add --no-cache curl && mkdir -p /app/data && chown -R bun:bun /app
 USER bun
 
 VOLUME ["/app/data"]
