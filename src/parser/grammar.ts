@@ -40,6 +40,13 @@ const CATEGORY_ALIASES: Record<string, string[]> = {
   "sube": ["public transit"],
   "nafta": ["gas"],
   "combustible": ["gas"],
+  "auto": ["car maintenance"],
+  "lavado": ["car maintenance"],
+  "mecanico": ["car maintenance"],
+  "mecánico": ["car maintenance"],
+  "taller": ["car maintenance"],
+  "estacionamiento": ["car maintenance"],
+  "parking": ["car maintenance"],
   // Housing
   "alquiler": ["rent, mortgage"],
   "renta": ["rent, mortgage"],
