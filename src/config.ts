@@ -24,6 +24,7 @@ const configSchema = z.object({
     .default("info"),
   fxCacheTtl: z.coerce.number().default(300),
   metadataCacheTtl: z.coerce.number().default(3600),
+  healthPort: z.coerce.number().default(8080),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -42,5 +43,6 @@ export function loadConfig(): Config {
     logLevel: env.BLUEPLATE_LOG_LEVEL,
     fxCacheTtl: env.BLUEPLATE_FX_CACHE_TTL,
     metadataCacheTtl: env.BLUEPLATE_METADATA_CACHE_TTL,
+    healthPort: env.BLUEPLATE_HEALTH_PORT,
   });
 }

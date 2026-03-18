@@ -34,6 +34,13 @@ async function main() {
   const bot = createBot(config, orchestrator, lm, db);
   await startBot(bot, config);
 
+  // Health check server
+  const health = Bun.serve({
+    port: config.healthPort,
+    fetch: () => new Response("ok"),
+  });
+  logger.info("Health check listening", { port: config.healthPort });
+
   // Start daily digest (10 PM Argentina = UTC-3)
   const digest = new DailyDigest(bot, db, config.allowedChatIds, 22, 0);
   digest.start();
@@ -43,6 +50,7 @@ async function main() {
     logger.info("Shutting down");
     digest.stop();
     bot.stop();
+    health.stop();
     db.close();
     process.exit(0);
   };

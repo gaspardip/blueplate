@@ -19,5 +19,6 @@ RUN mkdir -p /app/data && chown -R bun:bun /app
 USER bun
 
 VOLUME ["/app/data"]
+EXPOSE 8080
 
 CMD ["bun", "run", "src/index.ts"]
