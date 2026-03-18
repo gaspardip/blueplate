@@ -70,22 +70,23 @@ export function createBot(
     // Check if replying to a bot receipt → amend that specific transaction
     const replyTo = ctx.message.reply_to_message;
     if (replyTo && replyTo.from?.id === bot.botInfo.id) {
-      const record = db.getByBotReplyMessageId(chatId, replyTo.message_id);
-      if (record) {
-        const correction = parseCorrection(text) ?? parseCorrectionLoose(text);
-        if (correction) {
-          try {
-            const result = await orchestrator.amend(chatId, correction, record.id);
-            const reply = await ctx.reply("Amended:\n" + formatConfirmation(result));
-            db.setBotReplyMessageId(record.id, reply.message_id);
-            return;
-          } catch (error) {
-            if (error instanceof BlueplateError) {
-              await ctx.reply(error.message);
-              return;
-            }
-            throw error;
+      const correction = parseCorrection(text) ?? parseCorrectionLoose(text);
+      if (correction) {
+        const record = db.getByBotReplyMessageId(chatId, replyTo.message_id);
+        try {
+          const result = await orchestrator.amend(chatId, correction, record?.id);
+          const reply = await ctx.reply("Amended:\n" + formatConfirmation(result));
+          const amended = record ?? db.getLastUndoable(chatId);
+          if (amended) {
+            db.setBotReplyMessageId(amended.id, reply.message_id);
           }
+          return;
+        } catch (error) {
+          if (error instanceof BlueplateError) {
+            await ctx.reply(error.message);
+            return;
+          }
+          throw error;
         }
       }
     }
