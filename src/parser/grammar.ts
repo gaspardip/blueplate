@@ -105,11 +105,11 @@ const CATEGORY_ALIASES: Record<string, string[]> = {
   "limpieza": ["household"],
   "domestica": ["household"],
   "doméstica": ["household"],
-  // Loans & Transfers
-  "prestamo": ["loans"],
-  "préstamo": ["loans"],
-  "deuda": ["loans"],
-  "preste": ["loans"],
+  // Loans & Transfers → Payment, Transfer
+  "prestamo": ["payment, transfer"],
+  "préstamo": ["payment, transfer"],
+  "deuda": ["payment, transfer"],
+  "preste": ["payment, transfer"],
 };
 
 export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutcome {
