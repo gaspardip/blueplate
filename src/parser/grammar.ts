@@ -262,7 +262,7 @@ export function fuzzyMatchCategory(input: string, categories: CachedCategory[]):
   return null;
 }
 
-function fuzzyMatchAsset(input: string, assets: CachedAsset[]): CachedAsset | null {
+export function fuzzyMatchAsset(input: string, assets: CachedAsset[]): CachedAsset | null {
   const lower = input.toLowerCase();
 
   // Exact match

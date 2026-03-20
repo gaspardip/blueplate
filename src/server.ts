@@ -93,10 +93,10 @@ export function createServer(
     const chatId = Number(userId);
     const messageId = Date.now() + Math.floor(Math.random() * 1000);
 
-    const text = [payee, String(amount), currency, categoryHint, assetHint,
-      ...(tags?.map((t) => `#${t}`) ?? [])].filter(Boolean).join(" ");
-
-    const result = await orchestrator.process(text, chatId, messageId);
+    const result = await orchestrator.processStructured(
+      { payee, amount, currency, categoryHint, assetHint, tags },
+      chatId, messageId
+    );
     return c.json(result, 201);
   });
 

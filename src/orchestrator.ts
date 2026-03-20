@@ -6,8 +6,9 @@ import { buildMetadata, transactionToPayload } from "./lunchmoney/mapper.js";
 import { PayeeNormalizer } from "./payee.js";
 import { inferTagNames, resolveTagIds } from "./tagger.js";
 import { parse } from "./parser/index.js";
+import { fuzzyMatchCategory, fuzzyMatchAsset } from "./parser/grammar.js";
 import type { BlueplateDatabase } from "./storage/database.js";
-import type { Transaction, ResolutionContext } from "./types.js";
+import type { Transaction, ResolutionContext, CachedCategory, CachedAsset } from "./types.js";
 
 export interface ProcessResult {
   transaction: Transaction;
@@ -27,6 +28,15 @@ export interface UndoResult {
   currency: string;
 }
 
+interface FXResult {
+  amount: number;
+  currency: string;
+  originalAmount?: number;
+  originalCurrency?: string;
+  fxRate?: number;
+  fxSource?: string;
+}
+
 export class Orchestrator {
   private payee: PayeeNormalizer;
 
@@ -37,6 +47,33 @@ export class Orchestrator {
     private defaultCurrency: string
   ) {
     this.payee = new PayeeNormalizer(db);
+  }
+
+  private async convertIfArs(amount: number, currency: string): Promise<FXResult> {
+    if (currency.toUpperCase() !== "ARS") {
+      return { amount, currency };
+    }
+    const absAmount = Math.abs(amount);
+    const sign = amount < 0 ? -1 : 1;
+    const conversion = await this.fx.convert(absAmount, "ARS", "USD");
+    return {
+      amount: conversion.convertedAmount * sign,
+      currency: "USD",
+      originalAmount: amount,
+      originalCurrency: "ARS",
+      fxRate: conversion.rate,
+      fxSource: conversion.source,
+    };
+  }
+
+  private resolveCategory(hint: string, categories: CachedCategory[]): { id: number; name: string } | null {
+    const match = fuzzyMatchCategory(hint, categories);
+    return match ? { id: match.id, name: match.name } : null;
+  }
+
+  private resolveAsset(hint: string, assets: CachedAsset[]): { id: number; name: string } | null {
+    const match = fuzzyMatchAsset(hint, assets);
+    return match ? { id: match.id, name: match.name } : null;
   }
 
   async process(text: string, chatId: number, messageId: number): Promise<ProcessResult> {
@@ -77,124 +114,149 @@ export class Orchestrator {
     }
 
     const { expense } = parsed;
-    const currency = expense.currency ?? this.defaultCurrency;
-    const date = expense.date ?? new Date().toISOString().slice(0, 10);
 
-    // Apply split if requested
-    if (expense.splitCount) {
-      expense.amount = expense.amount / expense.splitCount;
+    return this.processExpense({
+      amount: expense.splitCount ? expense.amount / expense.splitCount : expense.amount,
+      currency: expense.currency,
+      payee: expense.payee,
+      categoryHint: expense.categoryHint,
+      assetHint: expense.assetHint,
+      tags: expense.tags,
+      note: expense.note,
+      date: expense.date,
+      splitCount: expense.splitCount,
+    }, chatId, messageId, ctx);
+  }
+
+  async processStructured(input: {
+    payee: string;
+    amount: number;
+    currency?: string;
+    categoryHint?: string;
+    assetHint?: string;
+    tags?: string[];
+    note?: string;
+    date?: string;
+  }, chatId: number, messageId: number): Promise<ProcessResult> {
+    const externalId = `bp_${chatId}_${messageId}`;
+
+    const existing = this.db.getByExternalId(externalId);
+    if (existing) {
+      logger.info("Duplicate, returning cached result", { externalId });
+      return {
+        transaction: {
+          amount: existing.amount,
+          currency: existing.currency,
+          originalAmount: existing.original_amount ?? undefined,
+          originalCurrency: existing.original_currency ?? undefined,
+          payee: existing.payee,
+          categoryName: existing.category_name ?? undefined,
+          date: existing.date,
+          externalId,
+        },
+        lmTransactionId: existing.lm_transaction_id,
+        fxRate: existing.fx_rate ?? undefined,
+        fxSource: existing.fx_source ?? undefined,
+        categoryName: existing.category_name ?? undefined,
+      };
     }
 
-    // Normalize payee (fuzzy dedup + casing)
-    const normalizedPayee = this.payee.normalize(expense.payee);
+    const ctx = await this.getResolutionContext();
+    return this.processExpense({
+      amount: input.amount,
+      currency: input.currency,
+      payee: input.payee,
+      categoryHint: input.categoryHint,
+      assetHint: input.assetHint,
+      tags: input.tags ?? [],
+      note: input.note,
+      date: input.date,
+    }, chatId, messageId, ctx);
+  }
 
-    // Resolve category (using ctx from cache, not re-fetching)
-    let categoryId: number | undefined;
-    let categoryName: string | undefined;
-    if (expense.categoryHint) {
-      const match = ctx.categories.find(
-        (c) => c.name.toLowerCase() === expense.categoryHint!.toLowerCase()
-      );
-      if (match) {
-        categoryId = match.id;
-        categoryName = match.name;
-      }
-    }
+  private async processExpense(input: {
+    amount: number;
+    currency?: string;
+    payee: string;
+    categoryHint?: string;
+    assetHint?: string;
+    tags: string[];
+    note?: string;
+    date?: string;
+    splitCount?: number;
+  }, chatId: number, messageId: number, ctx: ResolutionContext): Promise<ProcessResult> {
+    const externalId = `bp_${chatId}_${messageId}`;
+    const currency = input.currency ?? this.defaultCurrency;
+    const date = input.date ?? new Date().toISOString().slice(0, 10);
+    const normalizedPayee = this.payee.normalize(input.payee);
 
-    // Resolve asset (using ctx from cache, not re-fetching)
-    let assetId: number | undefined;
-    let assetName: string | undefined;
-    if (expense.assetHint) {
-      const match = ctx.assets.find(
-        (a) =>
-          a.name.toLowerCase() === expense.assetHint!.toLowerCase() ||
-          (a.displayName && a.displayName.toLowerCase() === expense.assetHint!.toLowerCase())
-      );
-      if (match) {
-        assetId = match.id;
-        assetName = match.name;
-      }
-    }
+    // Resolve category
+    const category = input.categoryHint ? this.resolveCategory(input.categoryHint, ctx.categories) : null;
 
-    // FX conversion if ARS
-    let finalAmount = expense.amount;
-    let finalCurrency = currency;
-    let originalAmount: number | undefined;
-    let originalCurrency: string | undefined;
-    let fxRate: number | undefined;
-    let fxSource: string | undefined;
+    // Resolve asset
+    const asset = input.assetHint ? this.resolveAsset(input.assetHint, ctx.assets) : null;
 
-    if (currency.toUpperCase() === "ARS") {
-      const absAmount = Math.abs(expense.amount);
-      const sign = expense.amount < 0 ? -1 : 1;
-      const conversion = await this.fx.convert(absAmount, "ARS", "USD");
-      finalAmount = conversion.convertedAmount * sign;
-      finalCurrency = "USD";
-      originalAmount = expense.amount;
-      originalCurrency = "ARS";
-      fxRate = conversion.rate;
-      fxSource = conversion.source;
-    }
+    // FX conversion
+    const fxResult = await this.convertIfArs(input.amount, currency);
 
-    // Resolve tags: auto-inferred from category + manual #tags from message
-    const autoTagNames = inferTagNames(categoryName);
-    const allTagNames = [...new Set([...autoTagNames, ...expense.tags])];
-    const tags = await this.lm.getTags();
-    const tagIds = resolveTagIds(allTagNames, tags);
+    // Resolve tags
+    const autoTagNames = inferTagNames(category?.name);
+    const allTagNames = [...new Set([...autoTagNames, ...input.tags])];
+    const tagIds = resolveTagIds(allTagNames, ctx.tags);
 
     // Build transaction
     const tx: Transaction = {
-      amount: finalAmount,
-      currency: finalCurrency,
-      originalAmount,
-      originalCurrency,
+      amount: fxResult.amount,
+      currency: fxResult.currency,
+      originalAmount: fxResult.originalAmount,
+      originalCurrency: fxResult.originalCurrency,
       payee: normalizedPayee,
-      categoryId,
-      categoryName,
-      assetId,
+      categoryId: category?.id,
+      categoryName: category?.name,
+      assetId: asset?.id,
       date,
       tags: allTagNames,
       externalId,
     };
 
-    // Build custom_metadata and payload
-    const metadata = buildMetadata(tx, chatId, messageId, fxRate, fxSource);
-    const payload = transactionToPayload(tx, metadata, expense.note);
+    // Build payload and create in LM
+    const metadata = buildMetadata(tx, chatId, messageId, fxResult.fxRate, fxResult.fxSource);
+    const payload = transactionToPayload(tx, metadata, input.note);
     if (tagIds.length > 0) {
       payload.tag_ids = tagIds;
     }
     const lmId = await this.lm.rawClient.createTransaction(payload);
 
-    // Save undo record (returns inserted row ID)
+    // Save undo record
     const localRecordId = this.db.saveTransaction({
       externalId,
       lmTransactionId: lmId,
       telegramChatId: chatId,
       telegramMessageId: messageId,
-      amount: finalAmount,
-      currency: finalCurrency,
-      originalAmount,
-      originalCurrency,
+      amount: fxResult.amount,
+      currency: fxResult.currency,
+      originalAmount: fxResult.originalAmount,
+      originalCurrency: fxResult.originalCurrency,
       payee: normalizedPayee,
-      categoryName,
-      assetName,
+      categoryName: category?.name,
+      assetName: asset?.name,
       date,
-      fxRate,
-      fxSource,
+      fxRate: fxResult.fxRate,
+      fxSource: fxResult.fxSource,
     });
 
-    logger.info("Transaction created", { externalId, lmId, amount: finalAmount, currency: finalCurrency });
+    logger.info("Transaction created", { externalId, lmId, amount: fxResult.amount, currency: fxResult.currency });
 
     return {
       transaction: tx,
       lmTransactionId: lmId,
       localRecordId,
-      fxRate,
-      fxSource,
-      categoryName,
-      accountName: assetName,
+      fxRate: fxResult.fxRate,
+      fxSource: fxResult.fxSource,
+      categoryName: category?.name,
+      accountName: asset?.name,
       autoTags: allTagNames.length > 0 ? allTagNames : undefined,
-      splitCount: expense.splitCount,
+      splitCount: input.splitCount,
     };
   }
 
@@ -227,29 +289,19 @@ export class Orchestrator {
 
     if (corrections.amount != null) {
       const currency = corrections.currency ?? record.original_currency ?? "ARS";
-      if (currency.toUpperCase() === "ARS") {
-        const absAmount = Math.abs(corrections.amount);
-        const sign = corrections.amount < 0 ? -1 : 1;
-        const conversion = await this.fx.convert(absAmount, "ARS", "USD");
-        newAmount = conversion.convertedAmount * sign;
-        newOriginalAmount = corrections.amount;
-        fxRate = conversion.rate;
-        fxSource = conversion.source;
-      } else {
-        newAmount = corrections.amount;
-        newOriginalAmount = null;
-      }
+      const fxResult = await this.convertIfArs(corrections.amount, currency);
+      newAmount = fxResult.amount;
+      newOriginalAmount = fxResult.originalAmount ?? null;
+      fxRate = fxResult.fxRate ?? null;
+      fxSource = fxResult.fxSource ?? null;
       updates.amount = newAmount.toFixed(2);
     }
 
     // Resolve new category
-    let categoryId: number | undefined;
     let categoryName = record.category_name ?? undefined;
     if (corrections.categoryHint) {
-      const { fuzzyMatchCategory } = await import("./parser/grammar.js");
-      const match = fuzzyMatchCategory(corrections.categoryHint, ctx.categories);
+      const match = this.resolveCategory(corrections.categoryHint, ctx.categories);
       if (match) {
-        categoryId = match.id;
         categoryName = match.name;
         updates.category_id = match.id;
       }
@@ -258,12 +310,7 @@ export class Orchestrator {
     // Resolve new account
     let assetName = record.asset_name ?? undefined;
     if (corrections.assetHint) {
-      const assets = ctx.assets;
-      const lower = corrections.assetHint.toLowerCase();
-      const match = assets.find(
-        (a) => a.name.toLowerCase() === lower ||
-          (a.displayName && a.displayName.toLowerCase() === lower)
-      );
+      const match = this.resolveAsset(corrections.assetHint, ctx.assets);
       if (match) {
         assetName = match.name;
         updates.manual_account_id = match.id;
@@ -329,10 +376,8 @@ export class Orchestrator {
       deleted = await this.lm.rawClient.deleteTransaction(record.lm_transaction_id);
     } catch (error) {
       if (error instanceof LunchMoneyError && error.statusCode === 404) {
-        // Already deleted or v2 DELETE not available
         deleted = true;
       } else {
-        // Fall back to update strategy
         logger.warn("DELETE failed, falling back to update", { error: String(error) });
         try {
           await this.lm.rawClient.updateTransaction(record.lm_transaction_id, {
