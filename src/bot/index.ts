@@ -151,9 +151,11 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
   ]);
 
   if (config.mode === "webhook" && config.webhookUrl) {
-    logger.info("Starting bot in webhook mode", { url: config.webhookUrl, port: config.webhookPort });
-    await bot.api.setWebhook(config.webhookUrl);
-    logger.warn("Webhook HTTP server not yet implemented — use polling mode");
+    logger.info("Starting bot in webhook mode", { url: config.webhookUrl });
+    await bot.api.setWebhook(config.webhookUrl, {
+      allowed_updates: ["message", "message_reaction"],
+      secret_token: config.webhookSecret,
+    });
   } else {
     logger.info("Starting bot in polling mode");
 

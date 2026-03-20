@@ -5,6 +5,7 @@ import { FXService } from "./fx/index.js";
 import { LunchMoneyService } from "./lunchmoney/index.js";
 import { Orchestrator } from "./orchestrator.js";
 import { createBot, startBot } from "./bot/index.js";
+import { createServer } from "./server.js";
 import { DailyDigest } from "./digest.js";
 
 async function main() {
@@ -34,12 +35,9 @@ async function main() {
   const bot = createBot(config, orchestrator, lm, db);
   await startBot(bot, config);
 
-  // Health check server
-  const health = Bun.serve({
-    port: config.healthPort,
-    fetch: () => new Response("ok"),
-  });
-  logger.info("Health check listening", { port: config.healthPort });
+  // Unified HTTP server: health check + webhook + API
+  const server = createServer(config, bot, orchestrator, lm, db);
+  logger.info("HTTP server listening", { port: config.healthPort });
 
   // Start daily digest (10 PM Argentina = UTC-3)
   const digest = new DailyDigest(bot, db, config.allowedChatIds, 22, 0);
@@ -50,7 +48,7 @@ async function main() {
     logger.info("Shutting down");
     digest.stop();
     bot.stop();
-    health.stop();
+    server.stop();
     db.close();
     process.exit(0);
   };
