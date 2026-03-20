@@ -5,7 +5,7 @@ export async function transcribe(buffer: ArrayBuffer, apiKey: string): Promise<s
   const form = new FormData();
   form.append("file", blob, "voice.ogg");
   form.append("model", "gpt-4o-mini-transcribe");
-  form.append("prompt", "Expense in Argentine Spanish. Examples: starbucks ocho mil, uber doce cincuenta dólares, pizza quince mil pesos visa");
+  form.append("prompt", "Output numbers as digits, not words. Examples: starbucks 8000, uber 12.50 dólares, pizza 15000 pesos visa, paula 12000 desayuno");
 
   const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
