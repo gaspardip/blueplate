@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import { logger } from "./logger.js";
 import type { BlueplateDatabase } from "./storage/database.js";
-import { formatDaySummary } from "./bot/formatters.js";
+import { formatDaySummary, formatWeeklySummary } from "./bot/formatters.js";
 
 export class DailyDigest {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -58,7 +58,40 @@ export class DailyDigest {
       }
     }
 
+    // Send weekly summary on Sundays
+    if (new Date().getDay() === 0) {
+      await this.sendWeekly();
+    }
+
     // Schedule next day
     this.scheduleNext();
+  }
+
+  private async sendWeekly(): Promise<void> {
+    const now = new Date();
+    const weekEnd = now.toISOString().slice(0, 10);
+    const weekStart = new Date(now);
+    weekStart.setDate(weekStart.getDate() - 6);
+    const weekStartStr = weekStart.toISOString().slice(0, 10);
+
+    const prevEnd = new Date(weekStart);
+    prevEnd.setDate(prevEnd.getDate() - 1);
+    const prevStart = new Date(prevEnd);
+    prevStart.setDate(prevStart.getDate() - 6);
+
+    for (const chatId of this.chatIds) {
+      try {
+        const rows = this.db.getTransactionsForDateRange(chatId, weekStartStr, weekEnd);
+        const prevRows = this.db.getTransactionsForDateRange(
+          chatId,
+          prevStart.toISOString().slice(0, 10),
+          prevEnd.toISOString().slice(0, 10)
+        );
+        const summary = formatWeeklySummary(rows, weekStartStr, weekEnd, prevRows);
+        await this.bot.api.sendMessage(chatId, summary);
+      } catch (error) {
+        logger.error("Failed to send weekly summary", { chatId, error: String(error) });
+      }
+    }
   }
 }

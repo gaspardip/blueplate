@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS user_defaults (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  telegram_chat_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(telegram_chat_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS payee_aliases (
   alias TEXT PRIMARY KEY,
   canonical TEXT NOT NULL,
@@ -328,6 +337,76 @@ export class BlueplateDatabase {
     );
   }
 
+  // --- Search ---
+
+  searchTransactions(chatId: number, query: string, offset: number, limit: number): { rows: TransactionRow[]; total: number } {
+    const isDate = /^\d{4}-\d{2}(-\d{2})?$/.test(query);
+    let whereClause: string;
+    let params: (string | number)[];
+
+    if (isDate) {
+      whereClause = "telegram_chat_id = ? AND date LIKE ? AND undone = 0";
+      params = [chatId, `${query}%`];
+    } else {
+      whereClause = "telegram_chat_id = ? AND LOWER(payee) LIKE ? AND undone = 0";
+      params = [chatId, `%${query.toLowerCase()}%`];
+    }
+
+    const countRow = this.db
+      .query<{ count: number }, (string | number)[]>(`SELECT COUNT(*) as count FROM transactions WHERE ${whereClause}`)
+      .get(...params);
+    const total = countRow?.count ?? 0;
+
+    const rows = this.db
+      .query<TransactionRow, (string | number)[]>(
+        `SELECT * FROM transactions WHERE ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`
+      )
+      .all(...params, limit, offset);
+
+    return { rows, total };
+  }
+
+  // --- Date Range ---
+
+  getTransactionsForDateRange(chatId: number, startDate: string, endDate: string): TransactionRow[] {
+    return this.db
+      .query<TransactionRow, [number, string, string]>(
+        "SELECT * FROM transactions WHERE telegram_chat_id = ? AND date >= ? AND date <= ? AND undone = 0 ORDER BY id ASC"
+      )
+      .all(chatId, startDate, endDate);
+  }
+
+  // --- Templates ---
+
+  saveTemplate(chatId: number, name: string, text: string): void {
+    this.db
+      .query("INSERT OR REPLACE INTO templates (telegram_chat_id, name, text) VALUES (?, ?, ?)")
+      .run(chatId, name.toLowerCase(), text);
+  }
+
+  getTemplate(chatId: number, name: string): TemplateRow | null {
+    return (
+      this.db
+        .query<TemplateRow, [number, string]>(
+          "SELECT * FROM templates WHERE telegram_chat_id = ? AND name = ?"
+        )
+        .get(chatId, name.toLowerCase()) ?? null
+    );
+  }
+
+  listTemplates(chatId: number): TemplateRow[] {
+    return this.db
+      .query<TemplateRow, [number]>("SELECT * FROM templates WHERE telegram_chat_id = ? ORDER BY name")
+      .all(chatId);
+  }
+
+  deleteTemplate(chatId: number, name: string): boolean {
+    const result = this.db
+      .query("DELETE FROM templates WHERE telegram_chat_id = ? AND name = ?")
+      .run(chatId, name.toLowerCase());
+    return result.changes > 0;
+  }
+
   // --- Payee Aliases ---
 
   getPayeeAlias(alias: string): string | null {
@@ -400,6 +479,14 @@ export interface TagRow {
   id: number;
   name: string;
   fetched_at: string;
+}
+
+export interface TemplateRow {
+  id: number;
+  telegram_chat_id: number;
+  name: string;
+  text: string;
+  created_at: string;
 }
 
 export interface FxRateRow {

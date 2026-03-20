@@ -232,6 +232,124 @@ describe("BlueplateDatabase", () => {
     });
   });
 
+  describe("searchTransactions", () => {
+    it("searches by payee", () => {
+      db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "Starbucks", date: "2026-03-17",
+      });
+      db.saveTransaction({
+        externalId: "bp_1_2", lmTransactionId: 101, telegramChatId: 1,
+        telegramMessageId: 2, amount: 10, currency: "USD", payee: "Pizza", date: "2026-03-17",
+      });
+      const { rows, total } = db.searchTransactions(1, "star", 0, 10);
+      expect(total).toBe(1);
+      expect(rows[0].payee).toBe("Starbucks");
+    });
+
+    it("searches by date prefix", () => {
+      db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "lunch", date: "2026-03-17",
+      });
+      db.saveTransaction({
+        externalId: "bp_1_2", lmTransactionId: 101, telegramChatId: 1,
+        telegramMessageId: 2, amount: 10, currency: "USD", payee: "dinner", date: "2026-04-01",
+      });
+      const { rows, total } = db.searchTransactions(1, "2026-03", 0, 10);
+      expect(total).toBe(1);
+      expect(rows[0].payee).toBe("lunch");
+    });
+
+    it("paginates results", () => {
+      for (let i = 1; i <= 8; i++) {
+        db.saveTransaction({
+          externalId: `bp_1_${i}`, lmTransactionId: 100 + i, telegramChatId: 1,
+          telegramMessageId: i, amount: i, currency: "USD", payee: "Pizza", date: "2026-03-17",
+        });
+      }
+      const page1 = db.searchTransactions(1, "pizza", 0, 5);
+      expect(page1.total).toBe(8);
+      expect(page1.rows.length).toBe(5);
+      const page2 = db.searchTransactions(1, "pizza", 5, 5);
+      expect(page2.rows.length).toBe(3);
+    });
+
+    it("returns empty for no match", () => {
+      const { rows, total } = db.searchTransactions(1, "nonexistent", 0, 10);
+      expect(total).toBe(0);
+      expect(rows.length).toBe(0);
+    });
+  });
+
+  describe("templates", () => {
+    it("saves and retrieves template", () => {
+      db.saveTemplate(1, "netflix", "15 usd streaming");
+      const t = db.getTemplate(1, "netflix");
+      expect(t).not.toBeNull();
+      expect(t!.text).toBe("15 usd streaming");
+    });
+
+    it("is case-insensitive", () => {
+      db.saveTemplate(1, "Netflix", "15 usd streaming");
+      expect(db.getTemplate(1, "netflix")).not.toBeNull();
+    });
+
+    it("lists templates", () => {
+      db.saveTemplate(1, "netflix", "15 usd streaming");
+      db.saveTemplate(1, "gym", "50k fitness");
+      const list = db.listTemplates(1);
+      expect(list.length).toBe(2);
+    });
+
+    it("deletes template", () => {
+      db.saveTemplate(1, "netflix", "15 usd streaming");
+      expect(db.deleteTemplate(1, "netflix")).toBe(true);
+      expect(db.getTemplate(1, "netflix")).toBeNull();
+    });
+
+    it("returns false for deleting nonexistent", () => {
+      expect(db.deleteTemplate(1, "nope")).toBe(false);
+    });
+
+    it("upserts on duplicate name", () => {
+      db.saveTemplate(1, "netflix", "15 usd streaming");
+      db.saveTemplate(1, "netflix", "20 usd streaming");
+      expect(db.getTemplate(1, "netflix")!.text).toBe("20 usd streaming");
+    });
+  });
+
+  describe("getTransactionsForDateRange", () => {
+    it("returns transactions in range", () => {
+      db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "mon", date: "2026-03-10",
+      });
+      db.saveTransaction({
+        externalId: "bp_1_2", lmTransactionId: 101, telegramChatId: 1,
+        telegramMessageId: 2, amount: 10, currency: "USD", payee: "wed", date: "2026-03-12",
+      });
+      db.saveTransaction({
+        externalId: "bp_1_3", lmTransactionId: 102, telegramChatId: 1,
+        telegramMessageId: 3, amount: 15, currency: "USD", payee: "outside", date: "2026-03-20",
+      });
+      const rows = db.getTransactionsForDateRange(1, "2026-03-10", "2026-03-15");
+      expect(rows.length).toBe(2);
+    });
+  });
+
+  describe("getRecentFxRates", () => {
+    it("returns recent rates in desc order", () => {
+      db.saveFxRate("ARS/USD", 1400, "dolarapi.com", "2026-03-17T10:00:00Z");
+      db.saveFxRate("ARS/USD", 1425, "dolarapi.com", "2026-03-17T12:00:00Z");
+      db.saveFxRate("ARS/USD", 1450, "dolarapi.com", "2026-03-17T14:00:00Z");
+      const rates = db.getRecentFxRates("ARS/USD", 2);
+      expect(rates.length).toBe(2);
+      expect(rates[0].rate).toBe(1450);
+      expect(rates[1].rate).toBe(1425);
+    });
+  });
+
   describe("categories", () => {
     it("upserts and retrieves categories", () => {
       db.upsertCategories([

@@ -1,5 +1,5 @@
 import { InlineKeyboard } from "grammy";
-import type { TransactionRow, FxRateRow } from "../storage/database.js";
+import type { TransactionRow, FxRateRow, TemplateRow } from "../storage/database.js";
 import type { ProcessResult } from "../orchestrator.js";
 
 export function formatConfirmation(result: ProcessResult): string {
@@ -94,6 +94,76 @@ export function formatCategories(categories: { id: number; name: string }[]): st
 export function formatAssets(assets: { id: number; name: string; currency: string }[]): string {
   if (assets.length === 0) return "No accounts found.";
   return "Accounts:\n" + assets.map((a) => `  ${a.name} (${a.currency})`).join("\n");
+}
+
+export function formatSearchResults(rows: TransactionRow[], query: string, offset: number, total: number): string {
+  if (total === 0) return `No results for "${query}".`;
+
+  const lines = rows.map((r, i) => {
+    let line = `${offset + i + 1}. ${capitalize(r.payee)} $${r.amount.toFixed(2)} ${r.currency}`;
+    if (r.date) line += ` (${r.date})`;
+    if (r.category_name) line += ` → ${r.category_name}`;
+    return line;
+  });
+
+  const showing = `Showing ${offset + 1}-${offset + rows.length} of ${total}`;
+  return [`Search: "${query}" — ${showing}`, ...lines].join("\n");
+}
+
+export function formatTemplateList(templates: TemplateRow[]): string {
+  if (templates.length === 0) return "No templates saved. Use /template add <name> <expense text>";
+  const lines = templates.map((t) => `  /${t.name} → ${t.text}`);
+  return ["Templates (use /t <name> to apply):", ...lines].join("\n");
+}
+
+export function formatWeeklySummary(
+  rows: TransactionRow[],
+  weekStart: string,
+  weekEnd: string,
+  prevRows?: TransactionRow[]
+): string {
+  if (rows.length === 0) return `No expenses this week (${weekStart} – ${weekEnd}).`;
+
+  let total = 0;
+  const byCategory = new Map<string, number>();
+  const byPayee = new Map<string, number>();
+
+  for (const r of rows) {
+    total += r.amount;
+    const cat = r.category_name ?? "Uncategorized";
+    byCategory.set(cat, (byCategory.get(cat) ?? 0) + r.amount);
+    byPayee.set(r.payee, (byPayee.get(r.payee) ?? 0) + r.amount);
+  }
+
+  const catLines = [...byCategory.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([cat, amt]) => `  ${cat}: $${amt.toFixed(2)}`);
+
+  const topPayees = [...byPayee.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([p, amt]) => `  ${capitalize(p)}: $${amt.toFixed(2)}`);
+
+  const lines = [
+    `Week ${weekStart} – ${weekEnd}`,
+    `${rows.length} transactions, $${total.toFixed(2)} USD total`,
+    "",
+    "By category:",
+    ...catLines,
+    "",
+    "Top payees:",
+    ...topPayees,
+  ];
+
+  if (prevRows && prevRows.length > 0) {
+    const prevTotal = prevRows.reduce((s, r) => s + r.amount, 0);
+    const diff = total - prevTotal;
+    const pct = prevTotal > 0 ? ((diff / prevTotal) * 100).toFixed(0) : "—";
+    const arrow = diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
+    lines.push("", `vs last week: $${prevTotal.toFixed(2)} (${arrow} ${pct}%)`);
+  }
+
+  return lines.join("\n");
 }
 
 export function formatFxRate(

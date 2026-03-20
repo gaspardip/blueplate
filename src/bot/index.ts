@@ -35,6 +35,9 @@ export function createBot(
   bot.command("alias", commands.alias);
   bot.command("fx", commands.fx);
   bot.command("rate", commands.fx);
+  bot.command("search", commands.search);
+  bot.command("template", commands.template);
+  bot.command("t", commands.t);
 
   // Callback queries: inline keyboard buttons (Undo / Edit)
   bot.on("callback_query:data", async (ctx) => {
@@ -64,6 +67,23 @@ export function createBot(
     if (data.startsWith("edit:")) {
       await ctx.answerCallbackQuery();
       await ctx.reply("Reply to the receipt above with your correction.");
+      return;
+    }
+
+    if (data.startsWith("s:")) {
+      const parts = data.slice(2).split(":");
+      const query = parts.slice(0, -1).join(":");
+      const offset = Number(parts[parts.length - 1]);
+      const { rows, total } = db.searchTransactions(chatId, query, offset, 5);
+      const { InlineKeyboard } = await import("grammy");
+      const keyboard = new InlineKeyboard();
+      if (offset > 0) keyboard.text("← Prev", `s:${query}:${offset - 5}`);
+      if (offset + 5 < total) keyboard.text("Next →", `s:${query}:${offset + 5}`);
+      const { formatSearchResults } = await import("./formatters.js");
+      await ctx.editMessageText(formatSearchResults(rows, query, offset, total), {
+        reply_markup: keyboard,
+      });
+      await ctx.answerCallbackQuery();
       return;
     }
 
@@ -185,6 +205,9 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     { command: "categories", description: "List categories" },
     { command: "accounts", description: "List accounts" },
     { command: "alias", description: "Set payee alias: /alias starbux Starbucks" },
+    { command: "search", description: "Search transactions: /search pizza" },
+    { command: "template", description: "Manage templates: /template add|list|delete" },
+    { command: "t", description: "Apply template: /t netflix" },
     { command: "fx", description: "Current blue dollar rate" },
   ]);
 

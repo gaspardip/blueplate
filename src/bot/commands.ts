@@ -6,9 +6,12 @@ import type { BlueplateDatabase } from "../storage/database.js";
 import {
   formatAssets,
   formatCategories,
+  formatConfirmation,
   formatDaySummary,
   formatFxRate,
   formatMonthSummary,
+  formatSearchResults,
+  formatTemplateList,
   formatUndone,
 } from "./formatters.js";
 
@@ -87,6 +90,79 @@ export function createCommandHandlers(
     accounts: async (ctx: Context) => {
       const assets = await lm.getAccounts(true);
       await ctx.reply(formatAssets(assets));
+    },
+
+    search: async (ctx: Context) => {
+      const chatId = ctx.chat!.id;
+      const query = (ctx.message?.text ?? "").replace(/^\/search\s*/, "").trim();
+      if (!query) {
+        await ctx.reply("Usage: /search <payee or date>\nExamples: /search starbucks, /search 2026-03");
+        return;
+      }
+      const { rows, total } = db.searchTransactions(chatId, query, 0, 5);
+      const { InlineKeyboard } = await import("grammy");
+      const keyboard = new InlineKeyboard();
+      if (total > 5) keyboard.text("Next →", `s:${query}:5`);
+      await ctx.reply(formatSearchResults(rows, query, 0, total), {
+        reply_markup: total > 5 ? keyboard : undefined,
+      });
+    },
+
+    template: async (ctx: Context) => {
+      const chatId = ctx.chat!.id;
+      const args = (ctx.message?.text ?? "").replace(/^\/template\s*/, "").trim();
+
+      if (!args || args === "list") {
+        const templates = db.listTemplates(chatId);
+        await ctx.reply(formatTemplateList(templates));
+        return;
+      }
+
+      if (args.startsWith("delete ") || args.startsWith("del ") || args.startsWith("rm ")) {
+        const name = args.replace(/^(delete|del|rm)\s+/, "").trim();
+        const deleted = db.deleteTemplate(chatId, name);
+        await ctx.reply(deleted ? `Template "${name}" deleted.` : `Template "${name}" not found.`);
+        return;
+      }
+
+      if (args.startsWith("add ")) {
+        const rest = args.slice(4).trim();
+        const spaceIdx = rest.indexOf(" ");
+        if (spaceIdx === -1) {
+          await ctx.reply("Usage: /template add <name> <expense text>\nExample: /template add netflix 15 usd streaming");
+          return;
+        }
+        const name = rest.slice(0, spaceIdx);
+        const text = rest.slice(spaceIdx + 1).trim();
+        db.saveTemplate(chatId, name, text);
+        await ctx.reply(`Template "${name}" saved. Use /t ${name} to apply.`);
+        return;
+      }
+
+      await ctx.reply("Usage:\n  /template add <name> <text>\n  /template list\n  /template delete <name>");
+    },
+
+    t: async (ctx: Context) => {
+      const chatId = ctx.chat!.id;
+      const messageId = ctx.message!.message_id;
+      const name = (ctx.message?.text ?? "").replace(/^\/t\s*/, "").trim();
+      if (!name) {
+        await ctx.reply("Usage: /t <template-name>\nSee /template list for available templates.");
+        return;
+      }
+      const template = db.getTemplate(chatId, name);
+      if (!template) {
+        await ctx.reply(`Template "${name}" not found. See /template list.`);
+        return;
+      }
+      // Feed the template text through the normal expense pipeline
+      const result = await orchestrator.process(template.text, chatId, messageId);
+      const { buildReceiptKeyboard } = await import("./formatters.js");
+      const keyboard = result.localRecordId ? buildReceiptKeyboard(result.localRecordId) : undefined;
+      const reply = await ctx.reply(formatConfirmation(result), { reply_markup: keyboard });
+      if (result.localRecordId) {
+        db.setBotReplyMessageId(result.localRecordId, reply.message_id);
+      }
     },
 
     fx: async (ctx: Context) => {
