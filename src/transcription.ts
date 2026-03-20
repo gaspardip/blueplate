@@ -4,8 +4,8 @@ export async function transcribe(buffer: ArrayBuffer, apiKey: string): Promise<s
   const blob = new Blob([buffer], { type: "audio/ogg" });
   const form = new FormData();
   form.append("file", blob, "voice.ogg");
-  form.append("model", "whisper-1");
-  form.append("language", "es");
+  form.append("model", "gpt-4o-mini-transcribe");
+  form.append("prompt", "Expense in Argentine Spanish. Examples: starbucks ocho mil, uber doce cincuenta dólares, pizza quince mil pesos visa");
 
   const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -15,8 +15,8 @@ export async function transcribe(buffer: ArrayBuffer, apiKey: string): Promise<s
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    logger.error("Whisper API error", { status: resp.status, body: text });
-    throw new Error(`Whisper API failed: ${resp.status}`);
+    logger.error("Transcription API error", { status: resp.status, body: text });
+    throw new Error(`Transcription API failed: ${resp.status}`);
   }
 
   const data = (await resp.json()) as { text: string };
