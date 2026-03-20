@@ -26,6 +26,7 @@ const configSchema = z.object({
   metadataCacheTtl: z.coerce.number().default(3600),
   healthPort: z.coerce.number().default(8080),
   webhookSecret: z.string().optional(),
+  openaiApiKey: z.string().optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -46,5 +47,6 @@ export function loadConfig(): Config {
     metadataCacheTtl: env.BLUEPLATE_METADATA_CACHE_TTL,
     healthPort: env.BLUEPLATE_HEALTH_PORT,
     webhookSecret: env.BLUEPLATE_WEBHOOK_SECRET,
+    openaiApiKey: env.BLUEPLATE_OPENAI_API_KEY,
   });
 }

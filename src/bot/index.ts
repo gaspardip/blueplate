@@ -9,6 +9,7 @@ import { parseCorrection, parseCorrectionLoose } from "../parser/corrections.js"
 import { createCommandHandlers } from "./commands.js";
 import { formatConfirmation, formatUndone, buildReceiptKeyboard } from "./formatters.js";
 import { authGuard, errorBoundary, requestLogger } from "./middleware.js";
+import { transcribe } from "../transcription.js";
 
 export function createBot(
   config: Config,
@@ -114,6 +115,44 @@ export function createBot(
           logger.error("Reaction undo failed", { error: String(error) });
         }
       }
+    }
+  });
+
+  // Voice messages → transcribe → process as expense
+  bot.on("message:voice", async (ctx) => {
+    if (!config.openaiApiKey) {
+      await ctx.reply("Voice messages not configured (missing OpenAI API key).");
+      return;
+    }
+
+    const chatId = ctx.chat.id;
+    const messageId = ctx.message.message_id;
+
+    const file = await ctx.getFile();
+    const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
+    const resp = await fetch(url);
+    const buffer = await resp.arrayBuffer();
+
+    const text = await transcribe(buffer, config.openaiApiKey);
+    logger.info("Voice transcribed", { chatId, text });
+
+    try {
+      const result = await orchestrator.process(text, chatId, messageId);
+      const keyboard = result.localRecordId ? buildReceiptKeyboard(result.localRecordId) : undefined;
+      const reply = await ctx.reply(`🎙 ${text}\n\n${formatConfirmation(result)}`, { reply_markup: keyboard });
+      if (result.localRecordId) {
+        db.setBotReplyMessageId(result.localRecordId, reply.message_id);
+      }
+    } catch (error) {
+      if (error instanceof ParseError) {
+        await ctx.reply(`🎙 ${text}\n\n${error.message}`);
+        return;
+      }
+      if (error instanceof BlueplateError) {
+        await ctx.reply(`🎙 ${text}\n\n${error.message}`);
+        return;
+      }
+      throw error;
     }
   });
 
