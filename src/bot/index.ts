@@ -128,13 +128,21 @@ export function createBot(
     const chatId = ctx.chat.id;
     const messageId = ctx.message.message_id;
 
-    const file = await ctx.getFile();
-    const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
-    const resp = await fetch(url);
-    const buffer = await resp.arrayBuffer();
-
-    const text = await transcribe(buffer, config.openaiApiKey);
-    logger.info("Voice transcribed", { chatId, text });
+    let text: string;
+    try {
+      const file = await ctx.getFile();
+      if (!file.file_path) throw new Error("No file path returned");
+      const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+      const buffer = await resp.arrayBuffer();
+      text = await transcribe(buffer, config.openaiApiKey);
+      logger.info("Voice transcribed", { chatId, text });
+    } catch (error) {
+      logger.error("Voice processing failed", { chatId, error: String(error) });
+      await ctx.reply("Couldn't process voice message. Try again or type it out.");
+      return;
+    }
 
     try {
       const result = await orchestrator.process(text, chatId, messageId);

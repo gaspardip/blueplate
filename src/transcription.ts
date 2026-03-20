@@ -1,3 +1,4 @@
+import { BlueplateError } from "./errors.js";
 import { logger } from "./logger.js";
 
 export async function transcribe(buffer: ArrayBuffer, apiKey: string): Promise<string> {
@@ -16,9 +17,13 @@ export async function transcribe(buffer: ArrayBuffer, apiKey: string): Promise<s
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     logger.error("Transcription API error", { status: resp.status, body: text });
-    throw new Error(`Transcription API failed: ${resp.status}`);
+    throw new BlueplateError(`Transcription failed: ${resp.status}`, "TRANSCRIPTION_ERROR", true);
   }
 
-  const data = (await resp.json()) as { text: string };
+  const data = (await resp.json()) as { text?: string };
+  if (!data.text) {
+    throw new BlueplateError("Transcription returned empty result", "TRANSCRIPTION_ERROR", false);
+  }
+
   return data.text.trim();
 }

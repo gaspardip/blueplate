@@ -89,12 +89,12 @@ export function createServer(
   });
 
   api.post("/transactions", zValidator("json", createTransactionSchema), async (c) => {
-    const { payee, amount, currency, categoryHint, assetHint, tags, userId } = c.req.valid("json");
+    const { payee, amount, currency, categoryHint, assetHint, tags, note, date, userId } = c.req.valid("json");
     const chatId = Number(userId);
     const messageId = Date.now() + Math.floor(Math.random() * 1000);
 
     const result = await orchestrator.processStructured(
-      { payee, amount, currency, categoryHint, assetHint, tags },
+      { payee, amount, currency, categoryHint, assetHint, tags, note, date },
       chatId, messageId
     );
     return c.json(result, 201);

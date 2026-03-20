@@ -77,34 +77,8 @@ export class Orchestrator {
   }
 
   async process(text: string, chatId: number, messageId: number): Promise<ProcessResult> {
-    const externalId = `bp_${chatId}_${messageId}`;
-
-    // Dedup check
-    const existing = this.db.getByExternalId(externalId);
-    if (existing) {
-      logger.info("Duplicate message, returning cached result", { externalId });
-      return {
-        transaction: {
-          amount: existing.amount,
-          currency: existing.currency,
-          originalAmount: existing.original_amount ?? undefined,
-          originalCurrency: existing.original_currency ?? undefined,
-          payee: existing.payee,
-          categoryName: existing.category_name ?? undefined,
-          date: existing.date,
-          externalId,
-        },
-        lmTransactionId: existing.lm_transaction_id,
-        fxRate: existing.fx_rate ?? undefined,
-        fxSource: existing.fx_source ?? undefined,
-        categoryName: existing.category_name ?? undefined,
-      };
-    }
-
-    // Build resolution context from cached LM data
     const ctx = await this.getResolutionContext();
 
-    // Parse
     const parsed = parse(text, ctx);
     if (!parsed.ok) {
       if (parsed.error === "ambiguous") {
@@ -138,29 +112,6 @@ export class Orchestrator {
     note?: string;
     date?: string;
   }, chatId: number, messageId: number): Promise<ProcessResult> {
-    const externalId = `bp_${chatId}_${messageId}`;
-
-    const existing = this.db.getByExternalId(externalId);
-    if (existing) {
-      logger.info("Duplicate, returning cached result", { externalId });
-      return {
-        transaction: {
-          amount: existing.amount,
-          currency: existing.currency,
-          originalAmount: existing.original_amount ?? undefined,
-          originalCurrency: existing.original_currency ?? undefined,
-          payee: existing.payee,
-          categoryName: existing.category_name ?? undefined,
-          date: existing.date,
-          externalId,
-        },
-        lmTransactionId: existing.lm_transaction_id,
-        fxRate: existing.fx_rate ?? undefined,
-        fxSource: existing.fx_source ?? undefined,
-        categoryName: existing.category_name ?? undefined,
-      };
-    }
-
     const ctx = await this.getResolutionContext();
     return this.processExpense({
       amount: input.amount,
@@ -186,6 +137,29 @@ export class Orchestrator {
     splitCount?: number;
   }, chatId: number, messageId: number, ctx: ResolutionContext): Promise<ProcessResult> {
     const externalId = `bp_${chatId}_${messageId}`;
+
+    // Dedup check
+    const existing = this.db.getByExternalId(externalId);
+    if (existing) {
+      logger.info("Duplicate message, returning cached result", { externalId });
+      return {
+        transaction: {
+          amount: existing.amount,
+          currency: existing.currency,
+          originalAmount: existing.original_amount ?? undefined,
+          originalCurrency: existing.original_currency ?? undefined,
+          payee: existing.payee,
+          categoryName: existing.category_name ?? undefined,
+          date: existing.date,
+          externalId,
+        },
+        lmTransactionId: existing.lm_transaction_id,
+        fxRate: existing.fx_rate ?? undefined,
+        fxSource: existing.fx_source ?? undefined,
+        categoryName: existing.category_name ?? undefined,
+      };
+    }
+
     const currency = input.currency ?? this.defaultCurrency;
     const date = input.date ?? new Date().toISOString().slice(0, 10);
     const normalizedPayee = this.payee.normalize(input.payee);
