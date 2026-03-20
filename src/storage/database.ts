@@ -310,6 +310,14 @@ export class BlueplateDatabase {
       .run(pair, rate, source, sourceTimestamp);
   }
 
+  getRecentFxRates(pair: string, limit: number): FxRateRow[] {
+    return this.db
+      .query<FxRateRow, [string, number]>(
+        "SELECT * FROM fx_rates WHERE pair = ? ORDER BY id DESC LIMIT ?"
+      )
+      .all(pair, limit);
+  }
+
   getLatestFxRate(pair: string): FxRateRow | null {
     return (
       this.db

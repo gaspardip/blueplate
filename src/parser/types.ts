@@ -27,6 +27,7 @@ export interface ParsedExpense {
   tags: string[];
   note?: string;
   date?: string; // YYYY-MM-DD or relative like "yesterday"
+  splitCount?: number;
 }
 
 export type TokenType =
@@ -37,6 +38,7 @@ export type TokenType =
   | "note"
   | "category"
   | "asset"
+  | "split"
   | "text";
 
 export interface Token {

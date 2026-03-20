@@ -1,4 +1,5 @@
-import type { TransactionRow } from "../storage/database.js";
+import { InlineKeyboard } from "grammy";
+import type { TransactionRow, FxRateRow } from "../storage/database.js";
 import type { ProcessResult } from "../orchestrator.js";
 
 export function formatConfirmation(result: ProcessResult): string {
@@ -20,10 +21,18 @@ export function formatConfirmation(result: ProcessResult): string {
   if (autoTags && autoTags.length > 0) details.push(`Tags: ${autoTags.map((t) => `#${t}`).join(" ")}`);
   if (tx.date) details.push(`Date: ${tx.date}`);
 
+  if (result.splitCount) details.push(`Split ${result.splitCount} ways`);
+
   if (details.length > 0) {
     return line1 + "\n" + details.join("\n");
   }
   return line1;
+}
+
+export function buildReceiptKeyboard(localRecordId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("Undo", `undo:${localRecordId}`)
+    .text("Edit", `edit:${localRecordId}`);
 }
 
 export function formatUndone(payee: string, amount: number, currency: string): string {
@@ -85,6 +94,28 @@ export function formatCategories(categories: { id: number; name: string }[]): st
 export function formatAssets(assets: { id: number; name: string; currency: string }[]): string {
   if (assets.length === 0) return "No accounts found.";
   return "Accounts:\n" + assets.map((a) => `  ${a.name} (${a.currency})`).join("\n");
+}
+
+export function formatFxRate(
+  current: { compra: number; venta: number; fechaActualizacion: string },
+  history: FxRateRow[]
+): string {
+  const lines = [
+    `Blue Dollar`,
+    `  Buy:  $${formatNumber(current.compra)}`,
+    `  Sell: $${formatNumber(current.venta)}`,
+    `  Updated: ${new Date(current.fechaActualizacion).toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" })}`,
+  ];
+
+  if (history.length >= 2) {
+    const latest = history[0].rate;
+    const previous = history[1].rate;
+    const diff = latest - previous;
+    const arrow = diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
+    lines.push(`  Trend: ${arrow} ${diff > 0 ? "+" : ""}${formatNumber(diff)}`);
+  }
+
+  return lines.join("\n");
 }
 
 function capitalize(s: string): string {

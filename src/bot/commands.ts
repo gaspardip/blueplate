@@ -7,6 +7,7 @@ import {
   formatAssets,
   formatCategories,
   formatDaySummary,
+  formatFxRate,
   formatMonthSummary,
   formatUndone,
 } from "./formatters.js";
@@ -86,6 +87,13 @@ export function createCommandHandlers(
     accounts: async (ctx: Context) => {
       const assets = await lm.getAccounts(true);
       await ctx.reply(formatAssets(assets));
+    },
+
+    fx: async (ctx: Context) => {
+      const resp = await fetch("https://dolarapi.com/v1/dolares/blue");
+      const data = await resp.json() as { compra: number; venta: number; fechaActualizacion: string };
+      const history = db.getRecentFxRates("ARS/USD", 5);
+      await ctx.reply(formatFxRate(data, history));
     },
 
     alias: async (ctx: Context) => {

@@ -113,12 +113,27 @@ const CATEGORY_ALIASES: Record<string, string[]> = {
 };
 
 export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutcome {
-  const amounts = tokens.filter((t) => t.type === "amount");
+  const splitTokens = tokens.filter((t) => t.type === "split");
+  let amounts = tokens.filter((t) => t.type === "amount");
   const currencies = tokens.filter((t) => t.type === "currency");
   const dates = tokens.filter((t) => t.type === "date");
   const tags = tokens.filter((t) => t.type === "tag");
   const notes = tokens.filter((t) => t.type === "note");
   const textTokens = tokens.filter((t) => t.type === "text");
+
+  // Handle "split N": extract split count from amount tokens adjacent to split token
+  let splitCount: number | undefined;
+  if (splitTokens.length > 0) {
+    const splitPos = splitTokens[0].position;
+    const splitAmountIdx = amounts.findIndex((a) => a.position === splitPos + 1);
+    if (splitAmountIdx !== -1) {
+      const n = Number(amounts[splitAmountIdx].value);
+      if (n >= 2 && n <= 20 && Number.isInteger(n)) {
+        splitCount = n;
+        amounts = amounts.filter((_, i) => i !== splitAmountIdx);
+      }
+    }
+  }
 
   // Validate: must have exactly one amount
   if (amounts.length === 0) {
@@ -204,6 +219,7 @@ export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutc
     tags: tags.map((t) => t.value),
     note: notes.map((n) => n.value).join(" ") || undefined,
     date,
+    splitCount,
   };
 
   return { ok: true, expense };

@@ -7,7 +7,7 @@ import type { LunchMoneyService } from "../lunchmoney/index.js";
 import type { BlueplateDatabase } from "../storage/database.js";
 import { parseCorrection, parseCorrectionLoose } from "../parser/corrections.js";
 import { createCommandHandlers } from "./commands.js";
-import { formatConfirmation, formatUndone } from "./formatters.js";
+import { formatConfirmation, formatUndone, buildReceiptKeyboard } from "./formatters.js";
 import { authGuard, errorBoundary, requestLogger } from "./middleware.js";
 
 export function createBot(
@@ -33,6 +33,42 @@ export function createBot(
   bot.command("categories", commands.categories);
   bot.command("accounts", commands.accounts);
   bot.command("alias", commands.alias);
+  bot.command("fx", commands.fx);
+  bot.command("rate", commands.fx);
+
+  // Callback queries: inline keyboard buttons (Undo / Edit)
+  bot.on("callback_query:data", async (ctx) => {
+    const data = ctx.callbackQuery.data;
+    const chatId = ctx.callbackQuery.message?.chat.id;
+    if (!chatId) return;
+
+    if (data.startsWith("undo:")) {
+      const recordId = Number(data.slice(5));
+      try {
+        const result = await orchestrator.undo(chatId, recordId);
+        await ctx.answerCallbackQuery("Undone");
+        const currentText = ctx.callbackQuery.message && "text" in ctx.callbackQuery.message
+          ? ctx.callbackQuery.message.text : "";
+        await ctx.editMessageText(currentText + "\n\n[UNDONE]", { reply_markup: { inline_keyboard: [] } });
+      } catch (error) {
+        if (error instanceof BlueplateError) {
+          await ctx.answerCallbackQuery(error.message);
+        } else {
+          logger.error("Callback undo failed", { error: String(error) });
+          await ctx.answerCallbackQuery("Error");
+        }
+      }
+      return;
+    }
+
+    if (data.startsWith("edit:")) {
+      await ctx.answerCallbackQuery();
+      await ctx.reply("Reply to the receipt above with your correction.");
+      return;
+    }
+
+    await ctx.answerCallbackQuery("Unknown action");
+  });
 
   // Reactions: ❌ on the bot's confirmation message → undo
   bot.on("message_reaction", async (ctx) => {
@@ -75,10 +111,11 @@ export function createBot(
         const record = db.getByBotReplyMessageId(chatId, replyTo.message_id);
         try {
           const result = await orchestrator.amend(chatId, correction, record?.id);
-          const reply = await ctx.reply("Amended:\n" + formatConfirmation(result));
-          const amended = record ?? db.getLastUndoable(chatId);
-          if (amended) {
-            db.setBotReplyMessageId(amended.id, reply.message_id);
+          const amendedRecord = record ?? db.getLastUndoable(chatId);
+          const keyboard = amendedRecord ? buildReceiptKeyboard(amendedRecord.id) : undefined;
+          const reply = await ctx.reply("Amended:\n" + formatConfirmation(result), { reply_markup: keyboard });
+          if (amendedRecord) {
+            db.setBotReplyMessageId(amendedRecord.id, reply.message_id);
           }
           return;
         } catch (error) {
@@ -96,8 +133,9 @@ export function createBot(
     if (correction) {
       try {
         const result = await orchestrator.amend(chatId, correction);
-        const reply = await ctx.reply("Amended:\n" + formatConfirmation(result));
         const lastRecord = db.getLastUndoable(chatId);
+        const keyboard = lastRecord ? buildReceiptKeyboard(lastRecord.id) : undefined;
+        const reply = await ctx.reply("Amended:\n" + formatConfirmation(result), { reply_markup: keyboard });
         if (lastRecord) {
           db.setBotReplyMessageId(lastRecord.id, reply.message_id);
         }
@@ -115,7 +153,8 @@ export function createBot(
     // Normal expense processing
     try {
       const result = await orchestrator.process(text, chatId, messageId);
-      const reply = await ctx.reply(formatConfirmation(result));
+      const keyboard = result.localRecordId ? buildReceiptKeyboard(result.localRecordId) : undefined;
+      const reply = await ctx.reply(formatConfirmation(result), { reply_markup: keyboard });
       if (result.localRecordId) {
         db.setBotReplyMessageId(result.localRecordId, reply.message_id);
       }
@@ -146,12 +185,13 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     { command: "categories", description: "List categories" },
     { command: "accounts", description: "List accounts" },
     { command: "alias", description: "Set payee alias: /alias starbux Starbucks" },
+    { command: "fx", description: "Current blue dollar rate" },
   ]);
 
   if (config.mode === "webhook" && config.webhookUrl) {
     logger.info("Starting bot in webhook mode", { url: config.webhookUrl });
     await bot.api.setWebhook(config.webhookUrl, {
-      allowed_updates: ["message", "message_reaction"],
+      allowed_updates: ["message", "message_reaction", "callback_query"],
       secret_token: config.webhookSecret,
     });
   } else {
@@ -167,7 +207,7 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     // Retry polling on 409 (happens during rolling updates when two containers overlap)
     const startPolling = () => {
       bot.start({
-        allowed_updates: ["message", "message_reaction"],
+        allowed_updates: ["message", "message_reaction", "callback_query"],
         onStart: () => logger.info("Bot is running"),
       }).catch((err) => {
         if (String(err).includes("409")) {

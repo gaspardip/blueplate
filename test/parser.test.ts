@@ -278,6 +278,47 @@ describe("parser", () => {
     });
   });
 
+  describe("split expenses", () => {
+    it("parses split 2", () => {
+      const result = parse("pizza 8k split 2", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(8000);
+      expect(result.expense.splitCount).toBe(2);
+      expect(result.expense.payee).toBe("pizza");
+    });
+
+    it("parses split 3 with category", () => {
+      const result = parse("pizza 15k split 3 restaurants", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(15000);
+      expect(result.expense.splitCount).toBe(3);
+      expect(result.expense.categoryHint).toBe("🍽️ Restaurants");
+    });
+
+    it("ignores split without valid number", () => {
+      const result = parse("pizza 1500 split", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.splitCount).toBeUndefined();
+    });
+
+    it("ignores split 0", () => {
+      // split 0 won't match because parseAmount rejects 0
+      const result = parse("pizza 1500 split 0", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.splitCount).toBeUndefined();
+    });
+
+    it("rejects split 1 as ambiguous amounts", () => {
+      // split 1 not in range 2-20 → "1" remains as an amount token → two amounts → ambiguous
+      const result = parse("pizza 1500 split 1", emptyCtx);
+      expect(result.ok).toBe(false);
+    });
+  });
+
   describe("error cases", () => {
     it("rejects empty input", () => {
       const result = parse("", emptyCtx);

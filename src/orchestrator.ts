@@ -18,6 +18,7 @@ export interface ProcessResult {
   categoryName?: string;
   accountName?: string;
   autoTags?: string[];
+  splitCount?: number;
 }
 
 export interface UndoResult {
@@ -78,6 +79,11 @@ export class Orchestrator {
     const { expense } = parsed;
     const currency = expense.currency ?? this.defaultCurrency;
     const date = expense.date ?? new Date().toISOString().slice(0, 10);
+
+    // Apply split if requested
+    if (expense.splitCount) {
+      expense.amount = expense.amount / expense.splitCount;
+    }
 
     // Normalize payee (fuzzy dedup + casing)
     const normalizedPayee = this.payee.normalize(expense.payee);
@@ -188,6 +194,7 @@ export class Orchestrator {
       categoryName,
       accountName: assetName,
       autoTags: allTagNames.length > 0 ? allTagNames : undefined,
+      splitCount: expense.splitCount,
     };
   }
 
@@ -308,8 +315,10 @@ export class Orchestrator {
     };
   }
 
-  async undo(chatId: number): Promise<UndoResult> {
-    const record = this.db.getLastUndoable(chatId);
+  async undo(chatId: number, recordId?: number): Promise<UndoResult> {
+    const record = recordId != null
+      ? this.db.getById(recordId)
+      : this.db.getLastUndoable(chatId);
     if (!record) {
       throw new BlueplateError("Nothing to undo.", "NO_UNDO", false);
     }

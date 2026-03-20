@@ -91,6 +91,13 @@ export function tokenize(input: string): Token[] {
       continue;
     }
 
+    // Split marker
+    if (lower === "split") {
+      tokens.push({ type: "split", value: word, raw: word, position });
+      position++;
+      continue;
+    }
+
     // Amount: optional -/$ prefix, digits with commas/dots, k/m suffix
     // Match: 1500, 1.500, 14,500, $1500, 12.50, 500k, 1.5m, $2M, -7500, -500k
     const amountMatch = word.match(/^-?\$?([\d]+(?:[.,]\d{3})*(?:[.,]\d{1,2})?[kmKM]?)$|^-?\$?([\d]+(?:[.,]\d+)?[kmKM]?)$/);
