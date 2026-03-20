@@ -1,3 +1,7 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import { zValidator } from "@hono/zod-validator";
+import { bearerAuth } from "hono/bearer-auth";
 import type { Bot } from "grammy";
 import { webhookCallback } from "grammy";
 import type { Config } from "./config.js";
@@ -6,6 +10,28 @@ import type { LunchMoneyService } from "./lunchmoney/index.js";
 import type { BlueplateDatabase } from "./storage/database.js";
 import { logger } from "./logger.js";
 
+const transactionsQuerySchema = z.object({
+  userId: z.string().regex(/^\d+$/, "userId must be numeric"),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+}).refine((d) => d.date || d.month, { message: "date or month param required" });
+
+const createTransactionSchema = z.object({
+  payee: z.string().min(1),
+  amount: z.number().refine((n) => n !== 0, "amount cannot be zero"),
+  currency: z.string().optional(),
+  categoryHint: z.string().optional(),
+  assetHint: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  note: z.string().optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  userId: z.string().regex(/^\d+$/, "userId must be numeric"),
+});
+
+const deleteQuerySchema = z.object({
+  userId: z.string().regex(/^\d+$/, "userId must be numeric"),
+});
+
 export function createServer(
   config: Config,
   bot: Bot,
@@ -13,124 +39,74 @@ export function createServer(
   lm: LunchMoneyService,
   db: BlueplateDatabase
 ) {
+  const app = new Hono();
+
+  // --- Error handler ---
+  app.onError((err, c) => {
+    logger.error("API error", { path: c.req.path, error: String(err) });
+    return c.json({ error: "Internal server error" }, 500);
+  });
+
+  // --- Health check ---
+  app.get("/", (c) => c.text("ok"));
+  app.get("/health", (c) => c.text("ok"));
+
+  // --- Telegram webhook ---
   const handleWebhook = webhookCallback(bot, "std/http", {
     secretToken: config.webhookSecret,
   });
+  app.post("/webhook", (c) => handleWebhook(c.req.raw));
 
-  function authenticateApi(req: Request): boolean {
-    if (!config.webhookSecret) return true;
-    const auth = req.headers.get("authorization");
-    return auth === `Bearer ${config.webhookSecret}`;
+  // --- API routes (auth required) ---
+  const api = new Hono();
+
+  if (config.webhookSecret) {
+    api.use("*", bearerAuth({ token: config.webhookSecret }));
   }
 
-  return Bun.serve({
-    port: config.healthPort,
-    async fetch(req) {
-      const url = new URL(req.url);
-
-      // Health check
-      if (url.pathname === "/" || url.pathname === "/health") {
-        return new Response("ok");
-      }
-
-      // Telegram webhook
-      if (url.pathname === "/webhook" && req.method === "POST") {
-        return handleWebhook(req);
-      }
-
-      // --- HTTP API (auth required) ---
-      if (url.pathname.startsWith("/api/")) {
-        if (!authenticateApi(req)) {
-          return Response.json({ error: "Unauthorized" }, { status: 401 });
-        }
-
-        try {
-          return await handleApi(url, req);
-        } catch (error) {
-          logger.error("API error", { path: url.pathname, error: String(error) });
-          return Response.json({ error: "Internal server error" }, { status: 500 });
-        }
-      }
-
-      return Response.json({ error: "Not found" }, { status: 404 });
-    },
+  api.get("/categories", async (c) => {
+    return c.json(await lm.getCategories());
   });
 
-  async function handleApi(url: URL, req: Request): Promise<Response> {
-    // GET /api/categories
-    if (url.pathname === "/api/categories" && req.method === "GET") {
-      return Response.json(await lm.getCategories());
-    }
+  api.get("/accounts", async (c) => {
+    return c.json(await lm.getAccounts());
+  });
 
-    // GET /api/accounts
-    if (url.pathname === "/api/accounts" && req.method === "GET") {
-      return Response.json(await lm.getAccounts());
-    }
+  api.get("/tags", async (c) => {
+    return c.json(await lm.getTags());
+  });
 
-    // GET /api/tags
-    if (url.pathname === "/api/tags" && req.method === "GET") {
-      return Response.json(await lm.getTags());
-    }
+  api.get("/transactions", zValidator("query", transactionsQuerySchema), async (c) => {
+    const { userId, date, month } = c.req.valid("query");
+    const chatId = Number(userId);
 
-    // GET /api/transactions?date=YYYY-MM-DD or ?month=YYYY-MM
-    if (url.pathname === "/api/transactions" && req.method === "GET") {
-      const userId = url.searchParams.get("userId");
-      if (!userId) return Response.json({ error: "userId required" }, { status: 400 });
-      const chatId = Number(userId);
-      if (isNaN(chatId)) return Response.json({ error: "invalid userId" }, { status: 400 });
+    if (date) return c.json(db.getTransactionsForDate(chatId, date));
+    return c.json(db.getTransactionsForMonth(chatId, month!));
+  });
 
-      const date = url.searchParams.get("date");
-      if (date) return Response.json(db.getTransactionsForDate(chatId, date));
+  api.post("/transactions", zValidator("json", createTransactionSchema), async (c) => {
+    const { payee, amount, currency, categoryHint, assetHint, tags, userId } = c.req.valid("json");
+    const chatId = Number(userId);
+    const messageId = Date.now() + Math.floor(Math.random() * 1000);
 
-      const month = url.searchParams.get("month");
-      if (month) return Response.json(db.getTransactionsForMonth(chatId, month));
+    const text = [payee, String(amount), currency, categoryHint, assetHint,
+      ...(tags?.map((t) => `#${t}`) ?? [])].filter(Boolean).join(" ");
 
-      return Response.json({ error: "date or month param required" }, { status: 400 });
-    }
+    const result = await orchestrator.process(text, chatId, messageId);
+    return c.json(result, 201);
+  });
 
-    // POST /api/transactions
-    if (url.pathname === "/api/transactions" && req.method === "POST") {
-      let body: Record<string, unknown>;
-      try {
-        body = await req.json();
-      } catch {
-        return Response.json({ error: "Invalid JSON body" }, { status: 400 });
-      }
+  api.delete("/transactions/:id", zValidator("query", deleteQuerySchema), async (c) => {
+    const lmId = Number(c.req.param("id"));
+    await lm.rawClient.deleteTransaction(lmId);
+    return c.body(null, 204);
+  });
 
-      const { payee, amount, currency, categoryHint, assetHint, tags, userId } = body as {
-        payee?: string; amount?: number; currency?: string;
-        categoryHint?: string; assetHint?: string; tags?: string[];
-        userId?: string;
-      };
+  app.route("/api", api);
 
-      if (!payee || !amount || !userId) {
-        return Response.json({ error: "payee, amount, and userId required" }, { status: 400 });
-      }
-
-      const chatId = Number(userId);
-      if (isNaN(chatId)) return Response.json({ error: "invalid userId" }, { status: 400 });
-
-      const messageId = Date.now() + Math.floor(Math.random() * 1000);
-      const text = [payee, String(amount), currency, categoryHint, assetHint,
-        ...(tags?.map((t) => `#${t}`) ?? [])].filter(Boolean).join(" ");
-
-      const result = await orchestrator.process(text, chatId, messageId);
-      return Response.json(result, { status: 201 });
-    }
-
-    // DELETE /api/transactions/:id
-    if (req.method === "DELETE") {
-      const match = url.pathname.match(/^\/api\/transactions\/(\d+)$/);
-      if (match) {
-        const lmId = Number(match[1]);
-        const userId = url.searchParams.get("userId");
-        if (!userId) return Response.json({ error: "userId required" }, { status: 400 });
-
-        await lm.rawClient.deleteTransaction(lmId);
-        return new Response(null, { status: 204 });
-      }
-    }
-
-    return Response.json({ error: "Not found" }, { status: 404 });
-  }
+  // --- Start server ---
+  return Bun.serve({
+    port: config.healthPort,
+    fetch: app.fetch,
+  });
 }

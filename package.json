@@ -12,7 +12,9 @@
     "test:watch": "bun test --watch"
   },
   "dependencies": {
+    "@hono/zod-validator": "^0.7.6",
     "grammy": "^1.35.0",
+    "hono": "^4.12.8",
     "zod": "^3.24.0"
   },
   "devDependencies": {
