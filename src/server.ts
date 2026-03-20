@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { bearerAuth } from "hono/bearer-auth";
@@ -43,6 +44,9 @@ export function createServer(
 
   // --- Error handler ---
   app.onError((err, c) => {
+    if (err instanceof HTTPException) {
+      return err.getResponse();
+    }
     logger.error("API error", { path: c.req.path, error: String(err) });
     return c.json({ error: "Internal server error" }, 500);
   });

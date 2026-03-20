@@ -137,6 +137,101 @@ describe("BlueplateDatabase", () => {
     });
   });
 
+  describe("getById", () => {
+    it("returns transaction by id", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "test", date: "2026-03-17",
+      });
+      const row = db.getById(id);
+      expect(row).not.toBeNull();
+      expect(row!.payee).toBe("test");
+    });
+
+    it("returns null for undone transaction", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "test", date: "2026-03-17",
+      });
+      db.markUndone(id);
+      expect(db.getById(id)).toBeNull();
+    });
+  });
+
+  describe("bot_reply_message_id", () => {
+    it("sets and retrieves by bot reply message id", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "test", date: "2026-03-17",
+      });
+      db.setBotReplyMessageId(id, 999);
+      const row = db.getByBotReplyMessageId(1, 999);
+      expect(row).not.toBeNull();
+      expect(row!.payee).toBe("test");
+    });
+
+    it("returns null for wrong chat id", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "test", date: "2026-03-17",
+      });
+      db.setBotReplyMessageId(id, 999);
+      expect(db.getByBotReplyMessageId(2, 999)).toBeNull();
+    });
+  });
+
+  describe("updateTransactionFields", () => {
+    it("updates amount", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "test", date: "2026-03-17",
+      });
+      db.updateTransactionFields(id, { amount: 10 });
+      expect(db.getById(id)!.amount).toBe(10);
+    });
+
+    it("updates payee", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "old", date: "2026-03-17",
+      });
+      db.updateTransactionFields(id, { payee: "new" });
+      expect(db.getById(id)!.payee).toBe("new");
+    });
+
+    it("updates multiple fields", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "test", date: "2026-03-17",
+      });
+      db.updateTransactionFields(id, { amount: 20, categoryName: "Food", assetName: "Visa" });
+      const row = db.getById(id)!;
+      expect(row.amount).toBe(20);
+      expect(row.category_name).toBe("Food");
+      expect(row.asset_name).toBe("Visa");
+    });
+
+    it("no-ops when no fields provided", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "test", date: "2026-03-17",
+      });
+      db.updateTransactionFields(id, {});
+      expect(db.getById(id)!.amount).toBe(5);
+    });
+  });
+
+  describe("saveTransaction returns id", () => {
+    it("returns the inserted row id", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1,
+        telegramMessageId: 1, amount: 5, currency: "USD", payee: "test", date: "2026-03-17",
+      });
+      expect(typeof id).toBe("number");
+      expect(id).toBeGreaterThan(0);
+    });
+  });
+
   describe("categories", () => {
     it("upserts and retrieves categories", () => {
       db.upsertCategories([
