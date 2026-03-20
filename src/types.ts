@@ -13,27 +13,6 @@ export interface Transaction {
   externalId: string;
 }
 
-export interface UndoRecord {
-  id: number;
-  externalId: string;
-  lmTransactionId: number;
-  telegramChatId: number;
-  telegramMessageId: number;
-  amount: number;
-  currency: string;
-  originalAmount?: number;
-  originalCurrency?: string;
-  payee: string;
-  categoryName?: string;
-  assetName?: string;
-  date: string;
-  fxRate?: number;
-  fxSource?: string;
-  undone: boolean;
-  undoneAt?: string;
-  createdAt: string;
-}
-
 export interface ResolutionContext {
   categories: CachedCategory[];
   assets: CachedAsset[];

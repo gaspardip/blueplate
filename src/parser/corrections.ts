@@ -23,24 +23,7 @@ const CORRECTION_PREFIXES = [
   "no,", "no ",
 ];
 
-export function parseCorrection(text: string): Correction | null {
-  const lower = text.toLowerCase().trim();
-
-  // Check if the message starts with a correction prefix
-  let body = "";
-  let isCorrection = false;
-
-  for (const prefix of CORRECTION_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      body = text.slice(prefix.length).replace(/^[\s,]+/, "").trim();
-      isCorrection = true;
-      break;
-    }
-  }
-
-  if (!isCorrection || !body) return null;
-
-  // Tokenize the correction body
+function tokensToCorrection(body: string): Correction | null {
   const tokens = tokenize(body);
   const correction: Correction = {};
   let hasAnything = false;
@@ -53,8 +36,6 @@ export function parseCorrection(text: string): Correction | null {
       correction.currency = token.value;
       hasAnything = true;
     } else if (token.type === "text") {
-      // Could be a category, account, or payee — store as hint
-      // The orchestrator will try to resolve it
       if (!correction.categoryHint) {
         correction.categoryHint = token.value;
         hasAnything = true;
@@ -68,35 +49,23 @@ export function parseCorrection(text: string): Correction | null {
   return hasAnything ? correction : null;
 }
 
-/**
- * Parse a correction without requiring a prefix — used when replying to a receipt.
- * Bare text like "12k", "visa", or "restaurants" is treated as a correction.
- */
-export function parseCorrectionLoose(text: string): Correction | null {
-  const body = text.trim();
-  if (!body) return null;
+export function parseCorrection(text: string): Correction | null {
+  const lower = text.toLowerCase().trim();
 
-  const tokens = tokenize(body);
-  const correction: Correction = {};
-  let hasAnything = false;
-
-  for (const token of tokens) {
-    if (token.type === "amount" && correction.amount == null) {
-      correction.amount = Number(token.value);
-      hasAnything = true;
-    } else if (token.type === "currency" && correction.currency == null) {
-      correction.currency = token.value;
-      hasAnything = true;
-    } else if (token.type === "text") {
-      if (!correction.categoryHint) {
-        correction.categoryHint = token.value;
-        hasAnything = true;
-      } else if (!correction.assetHint) {
-        correction.assetHint = token.value;
-        hasAnything = true;
-      }
+  for (const prefix of CORRECTION_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      const body = text.slice(prefix.length).replace(/^[\s,]+/, "").trim();
+      return body ? tokensToCorrection(body) : null;
     }
   }
 
-  return hasAnything ? correction : null;
+  return null;
+}
+
+/**
+ * Parse a correction without requiring a prefix — used when replying to a receipt.
+ */
+export function parseCorrectionLoose(text: string): Correction | null {
+  const body = text.trim();
+  return body ? tokensToCorrection(body) : null;
 }

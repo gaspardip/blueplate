@@ -115,7 +115,7 @@ export class BlueplateDatabase {
     date: string;
     fxRate?: number;
     fxSource?: string;
-  }): void {
+  }): number {
     this.db
       .query(
         `INSERT INTO transactions (
@@ -140,6 +140,7 @@ export class BlueplateDatabase {
         params.fxRate ?? null,
         params.fxSource ?? null
       );
+    return Number(this.db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id);
   }
 
   getByExternalId(externalId: string): TransactionRow | null {
@@ -184,6 +185,29 @@ export class BlueplateDatabase {
     this.db
       .query("UPDATE transactions SET bot_reply_message_id = ? WHERE id = ?")
       .run(botReplyMessageId, id);
+  }
+
+  updateTransactionFields(id: number, fields: {
+    amount?: number;
+    originalAmount?: number | null;
+    payee?: string;
+    categoryName?: string;
+    assetName?: string;
+    fxRate?: number | null;
+    fxSource?: string | null;
+  }): void {
+    const sets: string[] = [];
+    const values: (string | number | null)[] = [];
+    if (fields.amount != null) { sets.push("amount = ?"); values.push(fields.amount); }
+    if (fields.originalAmount !== undefined) { sets.push("original_amount = ?"); values.push(fields.originalAmount); }
+    if (fields.payee != null) { sets.push("payee = ?"); values.push(fields.payee); }
+    if (fields.categoryName != null) { sets.push("category_name = ?"); values.push(fields.categoryName); }
+    if (fields.assetName != null) { sets.push("asset_name = ?"); values.push(fields.assetName); }
+    if (fields.fxRate !== undefined) { sets.push("fx_rate = ?"); values.push(fields.fxRate); }
+    if (fields.fxSource !== undefined) { sets.push("fx_source = ?"); values.push(fields.fxSource); }
+    if (sets.length === 0) return;
+    values.push(id);
+    this.db.query(`UPDATE transactions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   }
 
   markUndone(id: number): void {

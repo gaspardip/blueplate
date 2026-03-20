@@ -12,6 +12,7 @@ import type { Transaction, ResolutionContext } from "./types.js";
 export interface ProcessResult {
   transaction: Transaction;
   lmTransactionId: number;
+  localRecordId?: number;
   fxRate?: number;
   fxSource?: string;
   categoryName?: string;
@@ -81,12 +82,11 @@ export class Orchestrator {
     // Normalize payee (fuzzy dedup + casing)
     const normalizedPayee = this.payee.normalize(expense.payee);
 
-    // Resolve category
+    // Resolve category (using ctx from cache, not re-fetching)
     let categoryId: number | undefined;
     let categoryName: string | undefined;
     if (expense.categoryHint) {
-      const categories = await this.lm.getCategories();
-      const match = categories.find(
+      const match = ctx.categories.find(
         (c) => c.name.toLowerCase() === expense.categoryHint!.toLowerCase()
       );
       if (match) {
@@ -95,12 +95,11 @@ export class Orchestrator {
       }
     }
 
-    // Resolve asset
+    // Resolve asset (using ctx from cache, not re-fetching)
     let assetId: number | undefined;
     let assetName: string | undefined;
     if (expense.assetHint) {
-      const assets = await this.lm.getAccounts();
-      const match = assets.find(
+      const match = ctx.assets.find(
         (a) =>
           a.name.toLowerCase() === expense.assetHint!.toLowerCase() ||
           (a.displayName && a.displayName.toLowerCase() === expense.assetHint!.toLowerCase())
@@ -160,8 +159,8 @@ export class Orchestrator {
     }
     const lmId = await this.lm.rawClient.createTransaction(payload);
 
-    // Save undo record
-    this.db.saveTransaction({
+    // Save undo record (returns inserted row ID)
+    const localRecordId = this.db.saveTransaction({
       externalId,
       lmTransactionId: lmId,
       telegramChatId: chatId,
@@ -183,6 +182,7 @@ export class Orchestrator {
     return {
       transaction: tx,
       lmTransactionId: lmId,
+      localRecordId,
       fxRate,
       fxSource,
       categoryName,
@@ -277,7 +277,16 @@ export class Orchestrator {
     // Update in LM
     await this.lm.rawClient.updateTransaction(record.lm_transaction_id, updates as any);
 
-    // Update local record (re-save with new values)
+    // Update local record
+    this.db.updateTransactionFields(record.id, {
+      amount: corrections.amount != null ? newAmount : undefined,
+      originalAmount: corrections.amount != null ? newOriginalAmount : undefined,
+      payee: corrections.payee ? payeeName : undefined,
+      categoryName: corrections.categoryHint ? categoryName : undefined,
+      assetName: corrections.assetHint ? assetName : undefined,
+      fxRate: corrections.amount != null ? (fxRate ?? undefined) : undefined,
+      fxSource: corrections.amount != null ? (fxSource ?? undefined) : undefined,
+    });
     logger.info("Transaction amended", { lmId: record.lm_transaction_id, updates });
 
     return {

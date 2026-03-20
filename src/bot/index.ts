@@ -116,10 +116,8 @@ export function createBot(
     try {
       const result = await orchestrator.process(text, chatId, messageId);
       const reply = await ctx.reply(formatConfirmation(result));
-      // Store the bot's reply message ID for future reply-based edits
-      const record = db.getByExternalId(`bp_${chatId}_${messageId}`);
-      if (record) {
-        db.setBotReplyMessageId(record.id, reply.message_id);
+      if (result.localRecordId) {
+        db.setBotReplyMessageId(result.localRecordId, reply.message_id);
       }
     } catch (error) {
       if (error instanceof ParseError) {
