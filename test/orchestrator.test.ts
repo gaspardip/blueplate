@@ -180,4 +180,110 @@ describe("Orchestrator", () => {
     const undoable = db.getLastUndoable(123);
     expect(undoable).toBeNull();
   });
+
+  it("amends amount on last transaction", async () => {
+    setupMockFetch();
+    // Also mock PUT for update
+    const prevFetch = globalThis.fetch;
+    const originalMock = prevFetch;
+    globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (urlStr.includes("/transactions/") && init?.method === "PUT") {
+        return Promise.resolve(new Response(JSON.stringify({ id: 9876 }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }));
+      }
+      return (originalMock as any)(url, init);
+    }) as any;
+
+    const fx = new FXService(db, 300);
+    const lm = new LunchMoneyService("test-key", db, 3600_000);
+    orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+    await orchestrator.process("pizza 8000", 123, 200);
+    const result = await orchestrator.amend(123, { amount: 10000 });
+
+    expect(result.transaction.originalAmount).toBe(10000);
+    expect(result.lmTransactionId).toBe(9876);
+  });
+
+  it("amends payee on last transaction", async () => {
+    setupMockFetch();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (urlStr.includes("/transactions/") && init?.method === "PUT") {
+        return Promise.resolve(new Response(JSON.stringify({ id: 9876 }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }));
+      }
+      return (prevFetch as any)(url, init);
+    }) as any;
+
+    const fx = new FXService(db, 300);
+    const lm = new LunchMoneyService("test-key", db, 3600_000);
+    orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+    await orchestrator.process("pizza 8000", 123, 201);
+    const result = await orchestrator.amend(123, { payee: "burger king" });
+
+    expect(result.transaction.payee).toBe("Burger King");
+  });
+
+  it("amend throws when nothing to amend", async () => {
+    setupMockFetch();
+    const fx = new FXService(db, 300);
+    const lm = new LunchMoneyService("test-key", db, 3600_000);
+    orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+    expect(orchestrator.amend(999, { amount: 5000 })).rejects.toThrow("Nothing to amend");
+  });
+
+  it("amend with USD amount skips FX conversion", async () => {
+    setupMockFetch();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (urlStr.includes("/transactions/") && init?.method === "PUT") {
+        return Promise.resolve(new Response(JSON.stringify({ id: 9876 }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }));
+      }
+      return (prevFetch as any)(url, init);
+    }) as any;
+
+    const fx = new FXService(db, 300);
+    const lm = new LunchMoneyService("test-key", db, 3600_000);
+    orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+    await orchestrator.process("uber 12 usd", 123, 202);
+    const result = await orchestrator.amend(123, { amount: 15, currency: "USD" });
+
+    expect(result.transaction.amount).toBe(15);
+    expect(result.transaction.originalAmount).toBeUndefined();
+  });
+
+  it("amend updates local DB record", async () => {
+    setupMockFetch();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (urlStr.includes("/transactions/") && init?.method === "PUT") {
+        return Promise.resolve(new Response(JSON.stringify({ id: 9876 }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }));
+      }
+      return (prevFetch as any)(url, init);
+    }) as any;
+
+    const fx = new FXService(db, 300);
+    const lm = new LunchMoneyService("test-key", db, 3600_000);
+    orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+    await orchestrator.process("pizza 8000", 123, 203);
+    await orchestrator.amend(123, { payee: "burger" });
+
+    const record = db.getLastUndoable(123);
+    expect(record!.payee).toBe("Burger");
+  });
 });

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test";
 import { transactionToPayload, buildMetadata } from "../src/lunchmoney/mapper.js";
+import { LunchMoneyClient } from "../src/lunchmoney/client.js";
 import type { Transaction } from "../src/types.js";
 
 describe("LunchMoney mapper", () => {
@@ -75,6 +76,16 @@ describe("LunchMoney mapper", () => {
     });
   });
 
+  it("includes tag_ids when present", () => {
+    const tx: Transaction = {
+      amount: 5, currency: "USD", payee: "test", date: "2026-03-17", externalId: "bp_1_1",
+    };
+    const metadata = buildMetadata(tx, 1, 1);
+    const payload = transactionToPayload(tx, metadata);
+    payload.tag_ids = [1, 2];
+    expect(payload.tag_ids).toEqual([1, 2]);
+  });
+
   describe("buildMetadata", () => {
     it("builds basic metadata without FX", () => {
       const tx: Transaction = {
@@ -113,5 +124,111 @@ describe("LunchMoney mapper", () => {
       expect(meta.fx_mode).toBe("blue_sell");
       expect(meta.fx_source).toBe("dolarapi.com");
     });
+  });
+});
+
+describe("LunchMoneyClient", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("createTransaction returns ID from transactions array", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(new Response(
+      JSON.stringify({ transactions: [{ id: 42 }] }),
+      { status: 201, headers: { "Content-Type": "application/json" } }
+    ))) as any;
+
+    const client = new LunchMoneyClient("test-key");
+    const id = await client.createTransaction({
+      payee: "test", amount: "10", currency: "usd", date: "2026-03-17",
+      external_id: "bp_1_1", status: "reviewed",
+    });
+    expect(id).toBe(42);
+  });
+
+  it("createTransaction returns ID from skipped_duplicates", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(new Response(
+      JSON.stringify({ transactions: [], skipped_duplicates: [{ existing_transaction_id: 99 }] }),
+      { status: 201, headers: { "Content-Type": "application/json" } }
+    ))) as any;
+
+    const client = new LunchMoneyClient("test-key");
+    const id = await client.createTransaction({
+      payee: "test", amount: "10", currency: "usd", date: "2026-03-17",
+      external_id: "bp_1_1", status: "reviewed",
+    });
+    expect(id).toBe(99);
+  });
+
+  it("createTransaction throws when no transaction returned", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(new Response(
+      JSON.stringify({ transactions: [], skipped_duplicates: [] }),
+      { status: 201, headers: { "Content-Type": "application/json" } }
+    ))) as any;
+
+    const client = new LunchMoneyClient("test-key");
+    expect(client.createTransaction({
+      payee: "test", amount: "10", currency: "usd", date: "2026-03-17",
+      external_id: "bp_1_1", status: "reviewed",
+    })).rejects.toThrow("No transaction returned");
+  });
+
+  it("deleteTransaction returns true on 204", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(new Response(null, { status: 204 }))) as any;
+    const client = new LunchMoneyClient("test-key");
+    expect(await client.deleteTransaction(123)).toBe(true);
+  });
+
+  it("deleteTransaction returns false on 404", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(new Response("Not found", { status: 404 }))) as any;
+    const client = new LunchMoneyClient("test-key");
+    expect(await client.deleteTransaction(123)).toBe(false);
+  });
+
+  it("throws LunchMoneyError on 401", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(new Response("Unauthorized", { status: 401 }))) as any;
+    const client = new LunchMoneyClient("test-key");
+    expect(client.getCategories()).rejects.toThrow("API key invalid");
+  });
+
+  it("throws LunchMoneyError on 500", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(new Response("Server error", { status: 500 }))) as any;
+    const client = new LunchMoneyClient("test-key");
+    expect(client.getCategories()).rejects.toThrow("Lunch Money rejected");
+  });
+
+  it("updateTransaction calls PUT", async () => {
+    let calledMethod = "";
+    globalThis.fetch = mock((_url: any, init?: RequestInit) => {
+      calledMethod = init?.method ?? "";
+      return Promise.resolve(new Response(JSON.stringify({}), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }));
+    }) as any;
+
+    const client = new LunchMoneyClient("test-key");
+    await client.updateTransaction(123, { payee: "test" });
+    expect(calledMethod).toBe("PUT");
+  });
+
+  it("getTransactions passes date params", async () => {
+    let calledUrl = "";
+    globalThis.fetch = mock((url: any) => {
+      calledUrl = typeof url === "string" ? url : url.href;
+      return Promise.resolve(new Response(JSON.stringify({ transactions: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }));
+    }) as any;
+
+    const client = new LunchMoneyClient("test-key");
+    await client.getTransactions("2026-03-01", "2026-03-31");
+    expect(calledUrl).toContain("start_date=2026-03-01");
+    expect(calledUrl).toContain("end_date=2026-03-31");
   });
 });
