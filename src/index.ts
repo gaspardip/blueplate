@@ -31,13 +31,13 @@ async function main() {
     logger.warn("Failed to warm LM cache — will retry on first use", { error: String(error) });
   }
 
-  // Start bot
+  // Create bot and start HTTP server before setWebhook
+  // (Telegram verifies the webhook URL is reachable)
   const bot = createBot(config, orchestrator, lm, db);
-  await startBot(bot, config);
-
-  // Unified HTTP server: health check + webhook + API
   const server = createServer(config, bot, orchestrator, lm, db);
   logger.info("HTTP server listening", { port: config.healthPort });
+
+  await startBot(bot, config);
 
   // Start daily digest (10 PM Argentina = UTC-3)
   const digest = new DailyDigest(bot, db, config.allowedChatIds, 22, 0);
