@@ -61,6 +61,16 @@ export function createBot(
     }
   }, 5 * 60 * 1000);
 
+  // Dedup: Telegram retries webhook updates if the handler is slow (e.g., PDF processing).
+  // Drop updates we've already seen.
+  const seenUpdates = new Set<number>();
+  setInterval(() => seenUpdates.clear(), 60_000);
+  bot.use(async (ctx, next) => {
+    if (seenUpdates.has(ctx.update.update_id)) return;
+    seenUpdates.add(ctx.update.update_id);
+    await next();
+  });
+
   // Middleware
   bot.use(errorBoundary());
   bot.use(requestLogger());

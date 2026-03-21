@@ -58,6 +58,7 @@ export function createServer(
   // --- Telegram webhook ---
   const handleWebhook = webhookCallback(bot, "std/http", {
     secretToken: config.webhookSecret,
+    timeoutMilliseconds: 55_000,
   });
   app.post("/webhook", (c) => handleWebhook(c.req.raw));
 
