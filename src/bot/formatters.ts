@@ -1,11 +1,39 @@
 import { InlineKeyboard } from "grammy";
 import type { TransactionRow, FxRateRow, TemplateRow } from "../storage/database.js";
 import type { ProcessResult } from "../orchestrator.js";
+import type { StatementTransaction } from "../pdf/index.js";
+import type { CachedAsset } from "../types.js";
 
 export function formatConfirmation(result: ProcessResult): string {
   const { transaction: tx, fxRate, categoryName, accountName, autoTags } = result;
   const isIncome = tx.amount < 0;
   const absAmount = Math.abs(tx.amount);
+
+  // Multi-account split display
+  if (result.accountLegs && result.accountLegs.length >= 2) {
+    const sign = isIncome ? "+" : "";
+    let line1 = `${tx.payee} — ${sign}$${absAmount.toFixed(2)} ${tx.currency}`;
+
+    const legLines = result.accountLegs.map((leg) => {
+      let line = `  ${leg.accountName}: $${Math.abs(leg.amount).toFixed(2)}`;
+      if (leg.originalAmount != null && tx.originalCurrency) {
+        line += ` (${tx.originalCurrency} ${formatNumber(Math.abs(leg.originalAmount))})`;
+      }
+      return line;
+    });
+
+    if (tx.originalAmount != null && tx.originalCurrency && fxRate) {
+      const absOriginal = Math.abs(tx.originalAmount);
+      line1 += `\n${tx.originalCurrency} ${formatNumber(absOriginal)} @ ${formatNumber(fxRate)}`;
+    }
+
+    const details: string[] = [];
+    if (categoryName) details.push(`Category: ${categoryName}`);
+    if (autoTags && autoTags.length > 0) details.push(`Tags: ${autoTags.map((t) => `#${t}`).join(" ")}`);
+    if (tx.date) details.push(`Date: ${tx.date}`);
+
+    return [line1, ...legLines, ...details].join("\n");
+  }
 
   // Amount line
   const sign = isIncome ? "+" : "";
@@ -186,6 +214,61 @@ export function formatFxRate(
   }
 
   return lines.join("\n");
+}
+
+export function formatImportSummary(transactions: StatementTransaction[]): string {
+  const dates = transactions.map((t) => t.date).sort();
+  const dateRange = dates[0] === dates[dates.length - 1]
+    ? dates[0]
+    : `${dates[0]} — ${dates[dates.length - 1]}`;
+
+  const total = transactions.reduce((s, t) => s + Math.abs(t.amount), 0);
+  const currency = transactions[0]?.currency ?? "ARS";
+
+  const sample = transactions.slice(0, 5);
+  const sampleLines = sample.map(
+    (t) => `  ${t.date.slice(5)} ${t.payee} — ${formatNumber(Math.abs(t.amount))}`,
+  );
+  if (transactions.length > 5) {
+    sampleLines.push(`  ... and ${transactions.length - 5} more`);
+  }
+
+  return [
+    `PDF Import: ${transactions.length} transactions`,
+    `${dateRange} | ${currency} ${formatNumber(total)}`,
+    "",
+    ...sampleLines,
+  ].join("\n");
+}
+
+export function formatImportResult(created: number, skipped: number, accountName: string): string {
+  const parts = [`Imported ${created} transactions to ${accountName}.`];
+  if (skipped > 0) parts.push(`${skipped} skipped.`);
+  return parts.join(" ");
+}
+
+export function buildImportKeyboard(
+  importKey: string,
+  accounts: CachedAsset[],
+  selectedAccountId?: number,
+): InlineKeyboard {
+  const kb = new InlineKeyboard();
+
+  if (selectedAccountId != null) {
+    const account = accounts.find((a) => a.id === selectedAccountId);
+    kb.text(`Confirm → ${account?.name ?? "Account"}`, `imp_confirm:${importKey}`);
+    kb.text("Cancel", `imp_cancel:${importKey}`);
+    return kb;
+  }
+
+  // Account picker — 2 per row
+  for (let i = 0; i < accounts.length; i++) {
+    kb.text(accounts[i].name, `imp_acct:${importKey}:${accounts[i].id}`);
+    if (i % 2 === 1) kb.row();
+  }
+  if (accounts.length % 2 === 1) kb.row();
+  kb.text("Cancel", `imp_cancel:${importKey}`);
+  return kb;
 }
 
 function capitalize(s: string): string {

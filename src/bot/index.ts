@@ -7,9 +7,40 @@ import type { LunchMoneyService } from "../lunchmoney/index.js";
 import type { BlueplateDatabase } from "../storage/database.js";
 import { parseCorrection, parseCorrectionLoose } from "../parser/corrections.js";
 import { createCommandHandlers } from "./commands.js";
-import { formatConfirmation, formatUndone, buildReceiptKeyboard } from "./formatters.js";
+import {
+  formatConfirmation,
+  formatUndone,
+  buildReceiptKeyboard,
+  formatImportSummary,
+  formatImportResult,
+  buildImportKeyboard,
+} from "./formatters.js";
 import { authGuard, errorBoundary, requestLogger } from "./middleware.js";
 import { transcribe } from "../transcription.js";
+import { extractPdfText, structureStatement } from "../pdf/index.js";
+import type { StatementResult } from "../pdf/index.js";
+import type { ProcessResult } from "../orchestrator.js";
+
+function trackReceiptReply(db: BlueplateDatabase, result: ProcessResult, replyMessageId: number): void {
+  if (result.accountLegs) {
+    for (const leg of result.accountLegs) {
+      db.setBotReplyMessageId(leg.localRecordId, replyMessageId);
+    }
+  } else if (result.localRecordId) {
+    db.setBotReplyMessageId(result.localRecordId, replyMessageId);
+  }
+}
+
+function receiptKeyboardId(result: ProcessResult): number | undefined {
+  return result.splitGroupId ?? result.localRecordId;
+}
+
+interface PendingImport {
+  result: StatementResult;
+  createdAt: number;
+}
+
+const PENDING_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 export function createBot(
   config: Config,
@@ -18,6 +49,17 @@ export function createBot(
   db: BlueplateDatabase
 ): Bot {
   const bot = new Bot(config.telegramBotToken);
+  const pendingImports = new Map<string, PendingImport>();
+
+  // Cleanup stale pending imports periodically
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, pending] of pendingImports) {
+      if (now - pending.createdAt > PENDING_TTL_MS) {
+        pendingImports.delete(key);
+      }
+    }
+  }, 5 * 60 * 1000);
 
   // Middleware
   bot.use(errorBoundary());
@@ -88,6 +130,80 @@ export function createBot(
       return;
     }
 
+    // Import: select account
+    if (data.startsWith("imp_acct:")) {
+      const rest = data.slice(9);
+      const lastColon = rest.lastIndexOf(":");
+      const importKey = rest.slice(0, lastColon);
+      const assetId = Number(rest.slice(lastColon + 1));
+      const pending = pendingImports.get(importKey);
+      if (!pending) {
+        await ctx.answerCallbackQuery("Import expired. Send the PDF again.");
+        return;
+      }
+      const accounts = await lm.getAccounts();
+      const keyboard = buildImportKeyboard(importKey, accounts, assetId);
+      const summary = formatImportSummary(pending.result.transactions);
+      await ctx.editMessageText(summary, { reply_markup: keyboard });
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    // Import: confirm
+    if (data.startsWith("imp_confirm:")) {
+      const importKey = data.slice(12);
+      const pending = pendingImports.get(importKey);
+      if (!pending) {
+        await ctx.answerCallbackQuery("Import expired. Send the PDF again.");
+        return;
+      }
+
+      // Find selected account from the keyboard
+      const keyboard = ctx.callbackQuery.message && "reply_markup" in ctx.callbackQuery.message
+        ? ctx.callbackQuery.message.reply_markup : undefined;
+      const confirmButton = keyboard?.inline_keyboard?.flat().find((b) =>
+        "callback_data" in b && b.callback_data?.startsWith("imp_confirm:")
+      );
+      const accountName = confirmButton && "text" in confirmButton
+        ? confirmButton.text.replace(/^Confirm → /, "") : "Unknown";
+
+      // Find assetId from the account picker state — it was in the imp_acct callback
+      const accounts = await lm.getAccounts();
+      const account = accounts.find((a) => a.name === accountName);
+      if (!account) {
+        await ctx.answerCallbackQuery("Account not found.");
+        return;
+      }
+
+      await ctx.answerCallbackQuery("Importing...");
+
+      try {
+        const messageId = ctx.callbackQuery.message?.message_id ?? 0;
+        const result = await orchestrator.processImport(
+          pending.result.transactions, chatId, messageId, account.id, account.name,
+        );
+        pendingImports.delete(importKey);
+
+        const text = formatImportResult(result.created, result.skipped, result.accountName);
+        const { InlineKeyboard } = await import("grammy");
+        const undoKb = new InlineKeyboard().text("Undo All", `undo:${result.splitGroupId}`);
+        await ctx.editMessageText(text, { reply_markup: undoKb });
+      } catch (error) {
+        logger.error("Import failed", { error: String(error) });
+        await ctx.editMessageText("Failed to create transactions. Try again.");
+      }
+      return;
+    }
+
+    // Import: cancel
+    if (data.startsWith("imp_cancel:")) {
+      const importKey = data.slice(11);
+      pendingImports.delete(importKey);
+      await ctx.editMessageText("Import cancelled.");
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
     await ctx.answerCallbackQuery("Unknown action");
   });
 
@@ -118,6 +234,64 @@ export function createBot(
     }
   });
 
+  // PDF documents → extract text → structure → import
+  bot.on("message:document", async (ctx) => {
+    const doc = ctx.message.document;
+    if (!doc) return;
+
+    if (doc.mime_type !== "application/pdf") {
+      await ctx.reply("Send a PDF file. Photos aren't supported yet.");
+      return;
+    }
+
+    if (!config.openaiApiKey) {
+      await ctx.reply("PDF import requires OpenAI API key.");
+      return;
+    }
+
+    if (doc.file_size && doc.file_size > 5 * 1024 * 1024) {
+      await ctx.reply("PDF too large (max 5MB).");
+      return;
+    }
+
+    const chatId = ctx.chat.id;
+    const messageId = ctx.message.message_id;
+
+    let statementResult: StatementResult;
+    try {
+      const file = await ctx.getFile();
+      if (!file.file_path) throw new Error("No file path returned");
+      const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+      const buffer = await resp.arrayBuffer();
+
+      const text = await extractPdfText(buffer);
+      statementResult = await structureStatement(text, config.openaiApiKey);
+    } catch (error) {
+      if (error instanceof BlueplateError) {
+        await ctx.reply(error.message);
+        return;
+      }
+      logger.error("PDF processing failed", { chatId, error: String(error) });
+      await ctx.reply("Couldn't download the file. Try again.");
+      return;
+    }
+
+    if (statementResult.transactions.length === 0) {
+      await ctx.reply("No transactions found in this PDF.");
+      return;
+    }
+
+    const importKey = `${chatId}:${messageId}`;
+    pendingImports.set(importKey, { result: statementResult, createdAt: Date.now() });
+
+    const summary = formatImportSummary(statementResult.transactions);
+    const accounts = await lm.getAccounts();
+    const keyboard = buildImportKeyboard(importKey, accounts);
+    await ctx.reply(summary + "\n\nSelect account:", { reply_markup: keyboard });
+  });
+
   // Voice messages → transcribe → process as expense
   bot.on("message:voice", async (ctx) => {
     if (!config.openaiApiKey) {
@@ -146,11 +320,10 @@ export function createBot(
 
     try {
       const result = await orchestrator.process(text, chatId, messageId);
-      const keyboard = result.localRecordId ? buildReceiptKeyboard(result.localRecordId) : undefined;
+      const kid = receiptKeyboardId(result);
+      const keyboard = kid ? buildReceiptKeyboard(kid) : undefined;
       const reply = await ctx.reply(`🎙 ${text}\n\n${formatConfirmation(result)}`, { reply_markup: keyboard });
-      if (result.localRecordId) {
-        db.setBotReplyMessageId(result.localRecordId, reply.message_id);
-      }
+      trackReceiptReply(db, result, reply.message_id);
     } catch (error) {
       if (error instanceof ParseError) {
         await ctx.reply(`🎙 ${text}\n\n${error.message}`);
@@ -220,11 +393,10 @@ export function createBot(
     // Normal expense processing
     try {
       const result = await orchestrator.process(text, chatId, messageId);
-      const keyboard = result.localRecordId ? buildReceiptKeyboard(result.localRecordId) : undefined;
+      const kid = receiptKeyboardId(result);
+      const keyboard = kid ? buildReceiptKeyboard(kid) : undefined;
       const reply = await ctx.reply(formatConfirmation(result), { reply_markup: keyboard });
-      if (result.localRecordId) {
-        db.setBotReplyMessageId(result.localRecordId, reply.message_id);
-      }
+      trackReceiptReply(db, result, reply.message_id);
     } catch (error) {
       if (error instanceof ParseError) {
         await ctx.reply(error.message);

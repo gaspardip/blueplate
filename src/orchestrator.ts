@@ -7,8 +7,19 @@ import { PayeeNormalizer } from "./payee.js";
 import { inferTagNames, resolveTagIds } from "./tagger.js";
 import { parse } from "./parser/index.js";
 import { fuzzyMatchCategory, fuzzyMatchAsset } from "./parser/grammar.js";
-import type { BlueplateDatabase } from "./storage/database.js";
+import type { BlueplateDatabase, TransactionRow } from "./storage/database.js";
 import type { Transaction, ResolutionContext, CachedCategory, CachedAsset } from "./types.js";
+import type { ParsedExpense } from "./parser/types.js";
+import type { LMCreateTransactionPayload } from "./lunchmoney/types.js";
+import type { StatementTransaction } from "./pdf/index.js";
+
+export interface AccountLeg {
+  accountName: string;
+  amount: number;
+  originalAmount?: number;
+  lmTransactionId: number;
+  localRecordId: number;
+}
 
 export interface ProcessResult {
   transaction: Transaction;
@@ -20,6 +31,15 @@ export interface ProcessResult {
   accountName?: string;
   autoTags?: string[];
   splitCount?: number;
+  accountLegs?: AccountLeg[];
+  splitGroupId?: number;
+}
+
+export interface ImportResult {
+  created: number;
+  skipped: number;
+  splitGroupId: number;
+  accountName: string;
 }
 
 export interface UndoResult {
@@ -88,6 +108,11 @@ export class Orchestrator {
     }
 
     const { expense } = parsed;
+
+    // Multi-account split path
+    if (expense.accountSplits && expense.accountSplits.length >= 2) {
+      return this.processMultiAccount(expense, chatId, messageId, ctx);
+    }
 
     return this.processExpense({
       amount: expense.splitCount ? expense.amount / expense.splitCount : expense.amount,
@@ -234,6 +259,343 @@ export class Orchestrator {
     };
   }
 
+  private async processMultiAccount(
+    expense: ParsedExpense,
+    chatId: number,
+    messageId: number,
+    ctx: ResolutionContext
+  ): Promise<ProcessResult> {
+    const splits = expense.accountSplits!;
+    const currency = expense.currency ?? this.defaultCurrency;
+    const date = expense.date ?? new Date().toISOString().slice(0, 10);
+    const normalizedPayee = this.payee.normalize(expense.payee);
+
+    // Resolve category
+    const category = expense.categoryHint ? this.resolveCategory(expense.categoryHint, ctx.categories) : null;
+
+    // Resolve tags
+    const autoTagNames = inferTagNames(category?.name);
+    const allTagNames = [...new Set([...autoTagNames, ...expense.tags])];
+    const tagIds = resolveTagIds(allTagNames, ctx.tags);
+
+    // Build payloads for all legs
+    const payloads: LMCreateTransactionPayload[] = [];
+    const legData: Array<{
+      asset: { id: number; name: string } | null;
+      fxResult: FXResult;
+      externalId: string;
+    }> = [];
+
+    for (let i = 0; i < splits.length; i++) {
+      const leg = splits[i];
+      const externalId = `bp_${chatId}_${messageId}_${i}`;
+
+      // Dedup check per leg
+      const existing = this.db.getByExternalId(externalId);
+      if (existing) {
+        logger.info("Duplicate multi-account message, returning cached", { externalId });
+        // If first leg exists, all should — fetch the group
+        const groupRecords = existing.split_group_id != null
+          ? this.db.getByGroupId(existing.split_group_id)
+          : [existing];
+        return this.buildMultiAccountResult(groupRecords, normalizedPayee, category?.name, date, allTagNames);
+      }
+
+      const asset = this.resolveAsset(leg.assetHint, ctx.assets);
+      const fxResult = await this.convertIfArs(leg.amount, currency);
+
+      const tx: Transaction = {
+        amount: fxResult.amount,
+        currency: fxResult.currency,
+        originalAmount: fxResult.originalAmount,
+        originalCurrency: fxResult.originalCurrency,
+        payee: normalizedPayee,
+        categoryId: category?.id,
+        categoryName: category?.name,
+        assetId: asset?.id,
+        date,
+        tags: allTagNames,
+        externalId,
+      };
+
+      const metadata = buildMetadata(tx, chatId, messageId, fxResult.fxRate, fxResult.fxSource);
+      const payload = transactionToPayload(tx, metadata, expense.note);
+      if (tagIds.length > 0) {
+        payload.tag_ids = tagIds;
+      }
+
+      payloads.push(payload);
+      legData.push({ asset, fxResult, externalId });
+    }
+
+    // Create all legs in one API call
+    const lmIds = await this.lm.rawClient.createTransactions(payloads);
+
+    // Save local records
+    const localRecordIds: number[] = [];
+    for (let i = 0; i < splits.length; i++) {
+      const { asset, fxResult, externalId } = legData[i];
+      const localId = this.db.saveTransaction({
+        externalId,
+        lmTransactionId: lmIds[i],
+        telegramChatId: chatId,
+        telegramMessageId: messageId,
+        amount: fxResult.amount,
+        currency: fxResult.currency,
+        originalAmount: fxResult.originalAmount,
+        originalCurrency: fxResult.originalCurrency,
+        payee: normalizedPayee,
+        categoryName: category?.name,
+        assetName: asset?.name,
+        date,
+        fxRate: fxResult.fxRate,
+        fxSource: fxResult.fxSource,
+      });
+      localRecordIds.push(localId);
+    }
+
+    // Set split_group_id on all records (use first record's id)
+    const groupId = localRecordIds[0];
+    for (const id of localRecordIds) {
+      this.db.setSplitGroupId(id, groupId);
+    }
+
+    // Build result
+    const accountLegs: AccountLeg[] = splits.map((leg, i) => ({
+      accountName: legData[i].asset?.name ?? leg.assetHint,
+      amount: legData[i].fxResult.amount,
+      originalAmount: legData[i].fxResult.originalAmount,
+      lmTransactionId: lmIds[i],
+      localRecordId: localRecordIds[i],
+    }));
+
+    // Use first leg's FX info for the summary line
+    const firstFx = legData[0].fxResult;
+    const totalAmount = accountLegs.reduce((s, l) => s + l.amount, 0);
+    const totalOriginal = legData.every((l) => l.fxResult.originalAmount != null)
+      ? splits.reduce((s, l) => s + l.amount, 0)
+      : undefined;
+
+    logger.info("Multi-account transaction created", {
+      groupId,
+      legs: splits.length,
+      lmIds,
+      totalAmount,
+    });
+
+    return {
+      transaction: {
+        amount: totalAmount,
+        currency: firstFx.currency,
+        originalAmount: totalOriginal,
+        originalCurrency: firstFx.originalCurrency,
+        payee: normalizedPayee,
+        categoryId: category?.id,
+        categoryName: category?.name,
+        date,
+        externalId: legData[0].externalId,
+      },
+      lmTransactionId: lmIds[0],
+      localRecordId: localRecordIds[0],
+      fxRate: firstFx.fxRate,
+      fxSource: firstFx.fxSource,
+      categoryName: category?.name,
+      autoTags: allTagNames.length > 0 ? allTagNames : undefined,
+      accountLegs,
+      splitGroupId: groupId,
+    };
+  }
+
+  private buildMultiAccountResult(
+    records: TransactionRow[],
+    payee: string,
+    categoryName: string | undefined,
+    date: string,
+    tags: string[]
+  ): ProcessResult {
+    const totalAmount = records.reduce((s, r) => s + r.amount, 0);
+    const totalOriginal = records.every((r) => r.original_amount != null)
+      ? records.reduce((s, r) => s + (r.original_amount ?? 0), 0)
+      : undefined;
+
+    return {
+      transaction: {
+        amount: totalAmount,
+        currency: records[0].currency,
+        originalAmount: totalOriginal,
+        originalCurrency: records[0].original_currency ?? undefined,
+        payee,
+        categoryName,
+        date,
+        externalId: records[0].external_id,
+      },
+      lmTransactionId: records[0].lm_transaction_id,
+      localRecordId: records[0].id,
+      fxRate: records[0].fx_rate ?? undefined,
+      fxSource: records[0].fx_source ?? undefined,
+      categoryName,
+      autoTags: tags.length > 0 ? tags : undefined,
+      accountLegs: records.map((r) => ({
+        accountName: r.asset_name ?? "Unknown",
+        amount: r.amount,
+        originalAmount: r.original_amount ?? undefined,
+        lmTransactionId: r.lm_transaction_id,
+        localRecordId: r.id,
+      })),
+      splitGroupId: records[0].split_group_id ?? undefined,
+    };
+  }
+
+  async processImport(
+    transactions: StatementTransaction[],
+    chatId: number,
+    messageId: number,
+    assetId: number,
+    assetName: string,
+  ): Promise<ImportResult> {
+    // Dedup check on the first leg's external_id
+    const firstExternalId = `bp_import_${chatId}_${messageId}_0`;
+    const existing = this.db.getByExternalId(firstExternalId);
+    if (existing && existing.split_group_id != null) {
+      const group = this.db.getByGroupId(existing.split_group_id);
+      return {
+        created: group.length,
+        skipped: 0,
+        splitGroupId: existing.split_group_id,
+        accountName: assetName,
+      };
+    }
+
+    // Resolve a fallback FX rate (current) in case no historical rate is cached.
+    const fallbackFx = await this.resolveImportFxRate();
+
+    const BATCH_SIZE = 50;
+    const allLocalIds: number[] = [];
+    const allLmIds: number[] = [];
+
+    for (let batchStart = 0; batchStart < transactions.length; batchStart += BATCH_SIZE) {
+      const batch = transactions.slice(batchStart, batchStart + BATCH_SIZE);
+      const payloads: LMCreateTransactionPayload[] = [];
+      const batchFxResults: FXResult[] = [];
+
+      for (let i = 0; i < batch.length; i++) {
+        const stx = batch[i];
+        const globalIndex = batchStart + i;
+        const externalId = `bp_import_${chatId}_${messageId}_${globalIndex}`;
+        const currency = stx.currency ?? this.defaultCurrency;
+        const normalizedPayee = this.payee.normalize(stx.payee);
+
+        // Look up historical rate for this transaction's date, fall back to current
+        const txFx = this.resolveRateForDate(stx.date) ?? fallbackFx;
+        const fxResult = this.convertAtRate(stx.amount, currency, txFx);
+        batchFxResults.push(fxResult);
+
+        const tx: Transaction = {
+          amount: fxResult.amount,
+          currency: fxResult.currency,
+          originalAmount: fxResult.originalAmount,
+          originalCurrency: fxResult.originalCurrency,
+          payee: normalizedPayee,
+          assetId,
+          date: stx.date,
+          externalId,
+        };
+
+        const metadata = buildMetadata(tx, chatId, messageId, fxResult.fxRate, fxResult.fxSource);
+        const payload = transactionToPayload(tx, metadata);
+        payload.manual_account_id = assetId;
+        payload.status = "unreviewed";
+        payloads.push(payload);
+      }
+
+      const lmIds = await this.lm.rawClient.createTransactions(payloads);
+      allLmIds.push(...lmIds);
+
+      for (let i = 0; i < batch.length; i++) {
+        const stx = batch[i];
+        const globalIndex = batchStart + i;
+        const externalId = `bp_import_${chatId}_${messageId}_${globalIndex}`;
+        const fxResult = batchFxResults[i];
+        const normalizedPayee = this.payee.normalize(stx.payee);
+
+        const localId = this.db.saveTransaction({
+          externalId,
+          lmTransactionId: lmIds[i],
+          telegramChatId: chatId,
+          telegramMessageId: messageId,
+          amount: fxResult.amount,
+          currency: fxResult.currency,
+          originalAmount: fxResult.originalAmount,
+          originalCurrency: fxResult.originalCurrency,
+          payee: normalizedPayee,
+          assetName,
+          date: stx.date,
+          fxRate: fxResult.fxRate,
+          fxSource: fxResult.fxSource,
+        });
+        allLocalIds.push(localId);
+      }
+    }
+
+    // Link all records via split_group_id for undo-all
+    const groupId = allLocalIds[0];
+    for (const id of allLocalIds) {
+      this.db.setSplitGroupId(id, groupId);
+    }
+
+    logger.info("Import created", {
+      groupId,
+      count: allLocalIds.length,
+      assetName,
+    });
+
+    return {
+      created: allLocalIds.length,
+      skipped: 0,
+      splitGroupId: groupId,
+      accountName: assetName,
+    };
+  }
+
+  private resolveRateForDate(date: string): { rate: number; source: string } | null {
+    const historical = this.db.getRateNearDate("ARS/USD", date);
+    if (!historical) return null;
+
+    // Only use if within 3 days of the target date (skip if too far)
+    const targetMs = new Date(`${date}T23:59:59Z`).getTime();
+    const rateMs = new Date(historical.source_timestamp).getTime();
+    const diffDays = Math.abs(targetMs - rateMs) / (1000 * 60 * 60 * 24);
+    if (diffDays > 3) return null;
+
+    return { rate: historical.rate, source: historical.source };
+  }
+
+  private async resolveImportFxRate(): Promise<{ rate: number; source: string }> {
+    const quote = await this.fx.getBlueRate();
+    return { rate: quote.rate, source: quote.source };
+  }
+
+  private convertAtRate(
+    amount: number,
+    currency: string,
+    fx: { rate: number; source: string } | null,
+  ): FXResult {
+    if (currency.toUpperCase() !== "ARS" || !fx) {
+      return { amount, currency };
+    }
+    const absAmount = Math.abs(amount);
+    const sign = amount < 0 ? -1 : 1;
+    const converted = Math.round((absAmount / fx.rate) * 100) / 100;
+    return {
+      amount: converted * sign,
+      currency: "USD",
+      originalAmount: amount,
+      originalCurrency: "ARS",
+      fxRate: fx.rate,
+      fxSource: fx.source,
+    };
+  }
+
   async amend(chatId: number, corrections: {
     amount?: number;
     currency?: string;
@@ -344,7 +706,21 @@ export class Orchestrator {
       throw new BlueplateError("Nothing to undo.", "NO_UNDO", false);
     }
 
-    // Try DELETE first, fall back to mark-as-undone
+    // If part of a split group, undo all legs
+    const records = record.split_group_id != null
+      ? this.db.getByGroupId(record.split_group_id)
+      : [record];
+
+    await Promise.all(records.map((r) => this.undoSingleRecord(r)));
+
+    return {
+      payee: record.payee,
+      amount: records.reduce((s, r) => s + r.amount, 0),
+      currency: record.currency,
+    };
+  }
+
+  private async undoSingleRecord(record: TransactionRow): Promise<void> {
     let deleted = false;
     try {
       deleted = await this.lm.rawClient.deleteTransaction(record.lm_transaction_id);
@@ -367,12 +743,6 @@ export class Orchestrator {
 
     this.db.markUndone(record.id);
     logger.info("Transaction undone", { id: record.id, lmId: record.lm_transaction_id, deleted });
-
-    return {
-      payee: record.payee,
-      amount: record.amount,
-      currency: record.currency,
-    };
   }
 
   async getResolutionContext(): Promise<ResolutionContext> {

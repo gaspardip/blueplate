@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS fx_rates (
   fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE INDEX IF NOT EXISTS idx_fx_rates_pair_source_ts
+  ON fx_rates (pair, source_timestamp);
+
 CREATE TABLE IF NOT EXISTS user_defaults (
   telegram_chat_id INTEGER PRIMARY KEY,
   default_currency TEXT NOT NULL DEFAULT 'ARS',
@@ -99,6 +102,14 @@ export class BlueplateDatabase {
     } catch {
       // Column already exists
     }
+
+    // Migration: add split_group_id for multi-account splits
+    try {
+      db.run("ALTER TABLE transactions ADD COLUMN split_group_id INTEGER");
+    } catch {
+      // Column already exists
+    }
+    db.run("CREATE INDEX IF NOT EXISTS idx_split_group ON transactions(split_group_id) WHERE split_group_id IS NOT NULL");
 
     return new BlueplateDatabase(db);
   }
@@ -225,6 +236,20 @@ export class BlueplateDatabase {
       .run(id);
   }
 
+  setSplitGroupId(id: number, groupId: number): void {
+    this.db
+      .query("UPDATE transactions SET split_group_id = ? WHERE id = ?")
+      .run(groupId, id);
+  }
+
+  getByGroupId(groupId: number): TransactionRow[] {
+    return this.db
+      .query<TransactionRow, [number]>(
+        "SELECT * FROM transactions WHERE split_group_id = ? AND undone = 0 ORDER BY id ASC"
+      )
+      .all(groupId);
+  }
+
   getTransactionsForDate(chatId: number, date: string): TransactionRow[] {
     return this.db
       .query<TransactionRow, [number, string]>(
@@ -337,6 +362,32 @@ export class BlueplateDatabase {
     );
   }
 
+  getRateNearDate(pair: string, date: string): FxRateRow | null {
+    // Find the rate whose source_timestamp is closest to the given date.
+    // source_timestamp is the actual date of the rate (not when we fetched it).
+    const target = `${date}T23:59:59`;
+    const before = this.db
+      .query<FxRateRow, [string, string]>(
+        `SELECT * FROM fx_rates WHERE pair = ? AND source_timestamp <= ?
+         ORDER BY source_timestamp DESC LIMIT 1`
+      )
+      .get(pair, target) ?? null;
+    const after = this.db
+      .query<FxRateRow, [string, string]>(
+        `SELECT * FROM fx_rates WHERE pair = ? AND source_timestamp > ?
+         ORDER BY source_timestamp ASC LIMIT 1`
+      )
+      .get(pair, target) ?? null;
+
+    if (!before) return after;
+    if (!after) return before;
+
+    const targetMs = new Date(target).getTime();
+    const beforeDist = targetMs - new Date(before.source_timestamp).getTime();
+    const afterDist = new Date(after.source_timestamp).getTime() - targetMs;
+    return beforeDist <= afterDist ? before : after;
+  }
+
   // --- Search ---
 
   searchTransactions(chatId: number, query: string, offset: number, limit: number): { rows: TransactionRow[]; total: number } {
@@ -444,6 +495,7 @@ export interface TransactionRow {
   telegram_chat_id: number;
   telegram_message_id: number;
   bot_reply_message_id: number | null;
+  split_group_id: number | null;
   amount: number;
   currency: string;
   original_amount: number | null;

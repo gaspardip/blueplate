@@ -286,4 +286,358 @@ describe("Orchestrator", () => {
     const record = db.getLastUndoable(123);
     expect(record!.payee).toBe("Burger");
   });
+
+  describe("processImport", () => {
+    function setupImportFetch() {
+      let lmIdCounter = 8000;
+      globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+
+        if (urlStr.includes("dolarapi.com")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ moneda: "USD", casa: "blue", compra: 1380, venta: 1425, fechaActualizacion: "2026-03-17T12:00:00.000Z" }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+
+        if (urlStr.includes("/transactions") && init?.method === "POST") {
+          const body = JSON.parse(init.body as string);
+          const txs = body.transactions.map((_: unknown, i: number) => ({
+            id: lmIdCounter + i, date: "2026-03-17", payee: "Test", amount: "10.00", currency: "usd",
+          }));
+          lmIdCounter += txs.length;
+          return Promise.resolve(
+            new Response(JSON.stringify({ transactions: txs }), { status: 201, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/transactions/") && init?.method === "DELETE") {
+          return Promise.resolve(new Response(null, { status: 204 }));
+        }
+
+        if (urlStr.includes("/transactions")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ transactions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/categories")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ categories: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/manual_accounts")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ manual_accounts: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/tags")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ tags: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        return Promise.resolve(new Response("Not found", { status: 404 }));
+      }) as any;
+    }
+
+    it("creates transactions with import external_id prefix", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "Mercado Libre", amount: 15200, currency: "ARS" },
+        { date: "2026-03-02", payee: "Netflix", amount: 4500, currency: "ARS" },
+      ];
+
+      const result = await orchestrator.processImport(transactions, 123, 700, 10, "Visa");
+
+      expect(result.created).toBe(2);
+      expect(result.skipped).toBe(0);
+      expect(result.accountName).toBe("Visa");
+      expect(result.splitGroupId).toBeDefined();
+
+      // Verify external_id pattern
+      const record0 = db.getByExternalId("bp_import_123_700_0");
+      const record1 = db.getByExternalId("bp_import_123_700_1");
+      expect(record0).not.toBeNull();
+      expect(record1).not.toBeNull();
+      expect(record0!.asset_name).toBe("Visa");
+      expect(record1!.asset_name).toBe("Visa");
+    });
+
+    it("links all import records via split_group_id", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "A", amount: 1000, currency: "ARS" },
+        { date: "2026-03-02", payee: "B", amount: 2000, currency: "ARS" },
+        { date: "2026-03-03", payee: "C", amount: 3000, currency: "ARS" },
+      ];
+
+      const result = await orchestrator.processImport(transactions, 123, 701, 10, "Visa");
+      const group = db.getByGroupId(result.splitGroupId);
+      expect(group.length).toBe(3);
+    });
+
+    it("dedup returns cached result on re-import", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "Test", amount: 5000, currency: "ARS" },
+      ];
+
+      const first = await orchestrator.processImport(transactions, 123, 702, 10, "Visa");
+      const second = await orchestrator.processImport(transactions, 123, 702, 10, "Visa");
+
+      expect(second.splitGroupId).toBe(first.splitGroupId);
+      expect(second.created).toBe(1);
+    });
+
+    it("undo-all deletes all imported transactions", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "A", amount: 1000, currency: "ARS" },
+        { date: "2026-03-02", payee: "B", amount: 2000, currency: "ARS" },
+      ];
+
+      const result = await orchestrator.processImport(transactions, 123, 703, 10, "Visa");
+      const firstRecord = db.getByExternalId("bp_import_123_703_0");
+      expect(firstRecord).not.toBeNull();
+
+      await orchestrator.undo(123, firstRecord!.id);
+
+      // All records should be undone
+      const group = db.getByGroupId(result.splitGroupId);
+      expect(group.length).toBe(0);
+    });
+
+    it("converts ARS to USD via FX for imported transactions", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "Test", amount: 14250, currency: "ARS" },
+      ];
+
+      const result = await orchestrator.processImport(transactions, 123, 704, 10, "Visa");
+      const record = db.getByExternalId("bp_import_123_704_0");
+      expect(record).not.toBeNull();
+      expect(record!.currency).toBe("USD");
+      expect(record!.original_amount).toBe(14250);
+      expect(record!.original_currency).toBe("ARS");
+      expect(record!.amount).toBe(10); // 14250 / 1425
+    });
+
+    it("uses historical rate for each transaction's date", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      // Seed historical rates for different dates
+      db.saveFxRate("ARS/USD", 1300, "argentinadatos-blue", "2026-02-01T18:00:00.000Z");
+      db.saveFxRate("ARS/USD", 1350, "argentinadatos-blue", "2026-02-15T18:00:00.000Z");
+
+      const transactions = [
+        { date: "2026-02-01", payee: "A", amount: 1300, currency: "ARS" },
+        { date: "2026-02-15", payee: "B", amount: 13500, currency: "ARS" },
+      ];
+
+      await orchestrator.processImport(transactions, 123, 705, 10, "Visa");
+
+      const r0 = db.getByExternalId("bp_import_123_705_0")!;
+      const r1 = db.getByExternalId("bp_import_123_705_1")!;
+      expect(r0.fx_rate).toBe(1300);
+      expect(r0.amount).toBe(1);    // 1300 / 1300
+      expect(r1.fx_rate).toBe(1350);
+      expect(r1.amount).toBe(10);   // 13500 / 1350
+    });
+
+    it("falls back to current rate when no historical rate cached", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      // No historical rates seeded — will fetch current (1425)
+      const transactions = [
+        { date: "2026-01-15", payee: "Test", amount: 14250, currency: "ARS" },
+      ];
+
+      await orchestrator.processImport(transactions, 123, 706, 10, "Visa");
+
+      const record = db.getByExternalId("bp_import_123_706_0");
+      expect(record).not.toBeNull();
+      expect(record!.fx_rate).toBe(1425); // current rate
+      expect(record!.amount).toBe(10);
+    });
+
+    it("uses different rates for transactions on different dates", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      db.saveFxRate("ARS/USD", 1300, "argentinadatos-blue", "2026-02-01T18:00:00.000Z");
+      db.saveFxRate("ARS/USD", 1400, "argentinadatos-blue", "2026-02-10T18:00:00.000Z");
+      db.saveFxRate("ARS/USD", 1500, "argentinadatos-blue", "2026-02-14T18:00:00.000Z");
+
+      const transactions = [
+        { date: "2026-02-01", payee: "A", amount: 1300, currency: "ARS" },
+        { date: "2026-02-10", payee: "B", amount: 2800, currency: "ARS" },
+        { date: "2026-02-14", payee: "C", amount: 7500, currency: "ARS" },
+      ];
+
+      await orchestrator.processImport(transactions, 123, 707, 10, "Visa");
+
+      const r0 = db.getByExternalId("bp_import_123_707_0")!;
+      const r1 = db.getByExternalId("bp_import_123_707_1")!;
+      const r2 = db.getByExternalId("bp_import_123_707_2")!;
+      expect(r0.fx_rate).toBe(1300);
+      expect(r0.amount).toBe(1);    // 1300/1300
+      expect(r1.fx_rate).toBe(1400);
+      expect(r1.amount).toBe(2);    // 2800/1400
+      expect(r2.fx_rate).toBe(1500);
+      expect(r2.amount).toBe(5);    // 7500/1500
+    });
+  });
+
+  function setupMockFetchWithAccounts() {
+    let lmIdCounter = 9000;
+    globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+
+      if (urlStr.includes("dolarapi.com")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ moneda: "USD", casa: "blue", compra: 1380, venta: 1425, fechaActualizacion: "2026-03-17T12:00:00.000Z" }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+
+      if (urlStr.includes("/transactions") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string);
+        const txs = body.transactions.map((_: unknown, i: number) => ({
+          id: lmIdCounter + i, date: "2026-03-17", payee: "Test", amount: "10.00", currency: "usd",
+        }));
+        lmIdCounter += txs.length;
+        return Promise.resolve(
+          new Response(JSON.stringify({ transactions: txs }), { status: 201, headers: { "Content-Type": "application/json" } })
+        );
+      }
+
+      if (urlStr.includes("/transactions/") && init?.method === "DELETE") {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+
+      if (urlStr.includes("/transactions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ transactions: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+        );
+      }
+
+      if (urlStr.includes("/categories")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ categories: [
+              { id: 1, name: "Comida", is_income: false, archived: false, is_group: false, group_id: null },
+            ] }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+
+      if (urlStr.includes("/manual_accounts")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ manual_accounts: [
+              { id: 10, name: "Mercado Pago", display_name: null, type: "cash", currency: "ars", balance: "0", to_base: 1, status: "active", exclude_from_transactions: false, created_by_name: "test", balance_as_of: "2026-03-17", created_at: "", updated_at: "" },
+              { id: 12, name: "Visa", display_name: null, type: "credit", currency: "ars", balance: "0", to_base: 1, status: "active", exclude_from_transactions: false, created_by_name: "test", balance_as_of: "2026-03-17", created_at: "", updated_at: "" },
+            ] }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+
+      if (urlStr.includes("/tags")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ tags: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
+        );
+      }
+
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    }) as any;
+  }
+
+  it("processes multi-account split creating N records", async () => {
+    setupMockFetchWithAccounts();
+    const fx = new FXService(db, 300);
+    const lm = new LunchMoneyService("test-key", db, 3600_000);
+    orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+    const result = await orchestrator.process("pizza 15k mp:5k visa:10k comida", 123, 500);
+
+    expect(result.accountLegs).toBeDefined();
+    expect(result.accountLegs!.length).toBe(2);
+    expect(result.accountLegs![0].accountName).toBe("Mercado Pago");
+    expect(result.accountLegs![1].accountName).toBe("Visa");
+    expect(result.splitGroupId).toBeDefined();
+    expect(result.categoryName).toBe("Comida");
+
+    // Verify local records
+    const groupRecords = db.getByGroupId(result.splitGroupId!);
+    expect(groupRecords.length).toBe(2);
+    expect(groupRecords[0].asset_name).toBe("Mercado Pago");
+    expect(groupRecords[1].asset_name).toBe("Visa");
+  });
+
+  it("multi-account undo deletes all legs", async () => {
+    setupMockFetchWithAccounts();
+    const fx = new FXService(db, 300);
+    const lm = new LunchMoneyService("test-key", db, 3600_000);
+    orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+    const result = await orchestrator.process("pizza 15k mp:5k visa:10k", 123, 501);
+    expect(result.splitGroupId).toBeDefined();
+
+    const undoResult = await orchestrator.undo(123, result.localRecordId);
+    expect(undoResult.payee).toBe("Pizza");
+
+    // All legs should be undone
+    const groupRecords = db.getByGroupId(result.splitGroupId!);
+    expect(groupRecords.length).toBe(0);
+  });
+
+  it("multi-account dedup returns cached result", async () => {
+    setupMockFetchWithAccounts();
+    const fx = new FXService(db, 300);
+    const lm = new LunchMoneyService("test-key", db, 3600_000);
+    orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+    const first = await orchestrator.process("pizza 15k mp:5k visa:10k", 123, 502);
+    const second = await orchestrator.process("pizza 15k mp:5k visa:10k", 123, 502);
+
+    expect(second.splitGroupId).toBe(first.splitGroupId);
+    expect(second.accountLegs!.length).toBe(2);
+  });
 });
