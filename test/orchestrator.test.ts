@@ -519,6 +519,69 @@ describe("Orchestrator", () => {
       expect(r2.fx_rate).toBe(1500);
       expect(r2.amount).toBe(5);    // 7500/1500
     });
+
+    it("skips transactions that match a manually logged entry by amount+date", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      // Manually log a transaction (simulates user typing "starbucks 3780")
+      await orchestrator.process("starbucks 3780", 123, 800);
+
+      // Now import a statement that includes the same charge
+      const transactions = [
+        { date: new Date().toISOString().slice(0, 10), payee: "STARBUCKS STORE 1042", amount: 3780, currency: "ARS" },
+        { date: new Date().toISOString().slice(0, 10), payee: "NETFLIX.COM", amount: 4500, currency: "ARS" },
+      ];
+
+      const result = await orchestrator.processImport(transactions, 123, 801, 10, "Visa");
+
+      expect(result.skipped).toBe(1);
+      expect(result.created).toBe(1);
+      // Only Netflix should have been created
+      const record = db.getByExternalId("bp_import_123_801_1");
+      expect(record).not.toBeNull();
+      // Starbucks should NOT exist
+      const skipped = db.getByExternalId("bp_import_123_801_0");
+      expect(skipped).toBeNull();
+    });
+
+    it("imports all when no manual entries match", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "A", amount: 1000, currency: "ARS" },
+        { date: "2026-03-02", payee: "B", amount: 2000, currency: "ARS" },
+      ];
+
+      const result = await orchestrator.processImport(transactions, 123, 802, 10, "Visa");
+      expect(result.skipped).toBe(0);
+      expect(result.created).toBe(2);
+    });
+
+    it("returns zero created when all transactions are duplicates", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const today = new Date().toISOString().slice(0, 10);
+      await orchestrator.process("cafe 5000", 123, 803);
+      await orchestrator.process("uber 8000", 123, 804);
+
+      const transactions = [
+        { date: today, payee: "CAFE MARTINEZ", amount: 5000, currency: "ARS" },
+        { date: today, payee: "UBER *TRIP", amount: 8000, currency: "ARS" },
+      ];
+
+      const result = await orchestrator.processImport(transactions, 123, 805, 10, "Visa");
+      expect(result.skipped).toBe(2);
+      expect(result.created).toBe(0);
+    });
   });
 
   function setupMockFetchWithAccounts() {

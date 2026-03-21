@@ -469,39 +469,79 @@ export class Orchestrator {
     // Resolve a fallback FX rate (current) in case no historical rate is cached.
     const fallbackFx = await this.resolveImportFxRate();
 
+    // Pre-compute FX results and filter out duplicates (same amount + date already logged manually)
+    interface PreparedTx {
+      stx: StatementTransaction;
+      globalIndex: number;
+      externalId: string;
+      fxResult: FXResult;
+      normalizedPayee: string;
+    }
+    const prepared: PreparedTx[] = [];
+    let skipped = 0;
+
+    // Build a set of existing (amount, date) pairs for fast lookup
+    const existingByDate = new Map<string, Set<number>>();
+    const allDates = [...new Set(transactions.map((t) => t.date))];
+    for (const date of allDates) {
+      const rows = this.db.getTransactionsForDate(chatId, date);
+      const amounts = new Set(rows.map((r) => r.amount));
+      existingByDate.set(date, amounts);
+    }
+
+    for (let i = 0; i < transactions.length; i++) {
+      const stx = transactions[i];
+      const externalId = `bp_import_${chatId}_${messageId}_${i}`;
+      const currency = stx.currency ?? this.defaultCurrency;
+      const normalizedPayee = this.payee.normalize(stx.payee);
+      const txFx = this.resolveRateForDate(stx.date) ?? fallbackFx;
+      const fxResult = this.convertAtRate(stx.amount, currency, txFx);
+
+      // Skip if a manual entry with the same converted amount + date already exists
+      const existingAmounts = existingByDate.get(stx.date);
+      if (existingAmounts?.has(fxResult.amount)) {
+        logger.info("Import skipping duplicate", {
+          date: stx.date,
+          payee: normalizedPayee,
+          amount: fxResult.amount,
+        });
+        skipped++;
+        continue;
+      }
+
+      prepared.push({ stx, globalIndex: i, externalId, fxResult, normalizedPayee });
+    }
+
+    if (prepared.length === 0) {
+      return {
+        created: 0,
+        skipped,
+        splitGroupId: 0,
+        accountName: assetName,
+      };
+    }
+
+    // Batch create in LM
     const BATCH_SIZE = 50;
     const allLocalIds: number[] = [];
-    const allLmIds: number[] = [];
 
-    for (let batchStart = 0; batchStart < transactions.length; batchStart += BATCH_SIZE) {
-      const batch = transactions.slice(batchStart, batchStart + BATCH_SIZE);
+    for (let batchStart = 0; batchStart < prepared.length; batchStart += BATCH_SIZE) {
+      const batch = prepared.slice(batchStart, batchStart + BATCH_SIZE);
       const payloads: LMCreateTransactionPayload[] = [];
-      const batchFxResults: FXResult[] = [];
 
-      for (let i = 0; i < batch.length; i++) {
-        const stx = batch[i];
-        const globalIndex = batchStart + i;
-        const externalId = `bp_import_${chatId}_${messageId}_${globalIndex}`;
-        const currency = stx.currency ?? this.defaultCurrency;
-        const normalizedPayee = this.payee.normalize(stx.payee);
-
-        // Look up historical rate for this transaction's date, fall back to current
-        const txFx = this.resolveRateForDate(stx.date) ?? fallbackFx;
-        const fxResult = this.convertAtRate(stx.amount, currency, txFx);
-        batchFxResults.push(fxResult);
-
+      for (const p of batch) {
         const tx: Transaction = {
-          amount: fxResult.amount,
-          currency: fxResult.currency,
-          originalAmount: fxResult.originalAmount,
-          originalCurrency: fxResult.originalCurrency,
-          payee: normalizedPayee,
+          amount: p.fxResult.amount,
+          currency: p.fxResult.currency,
+          originalAmount: p.fxResult.originalAmount,
+          originalCurrency: p.fxResult.originalCurrency,
+          payee: p.normalizedPayee,
           assetId,
-          date: stx.date,
-          externalId,
+          date: p.stx.date,
+          externalId: p.externalId,
         };
 
-        const metadata = buildMetadata(tx, chatId, messageId, fxResult.fxRate, fxResult.fxSource);
+        const metadata = buildMetadata(tx, chatId, messageId, p.fxResult.fxRate, p.fxResult.fxSource);
         const payload = transactionToPayload(tx, metadata);
         payload.manual_account_id = assetId;
         payload.status = "unreviewed";
@@ -509,29 +549,23 @@ export class Orchestrator {
       }
 
       const lmIds = await this.lm.rawClient.createTransactions(payloads);
-      allLmIds.push(...lmIds);
 
       for (let i = 0; i < batch.length; i++) {
-        const stx = batch[i];
-        const globalIndex = batchStart + i;
-        const externalId = `bp_import_${chatId}_${messageId}_${globalIndex}`;
-        const fxResult = batchFxResults[i];
-        const normalizedPayee = this.payee.normalize(stx.payee);
-
+        const p = batch[i];
         const localId = this.db.saveTransaction({
-          externalId,
+          externalId: p.externalId,
           lmTransactionId: lmIds[i],
           telegramChatId: chatId,
           telegramMessageId: messageId,
-          amount: fxResult.amount,
-          currency: fxResult.currency,
-          originalAmount: fxResult.originalAmount,
-          originalCurrency: fxResult.originalCurrency,
-          payee: normalizedPayee,
+          amount: p.fxResult.amount,
+          currency: p.fxResult.currency,
+          originalAmount: p.fxResult.originalAmount,
+          originalCurrency: p.fxResult.originalCurrency,
+          payee: p.normalizedPayee,
           assetName,
-          date: stx.date,
-          fxRate: fxResult.fxRate,
-          fxSource: fxResult.fxSource,
+          date: p.stx.date,
+          fxRate: p.fxResult.fxRate,
+          fxSource: p.fxResult.fxSource,
         });
         allLocalIds.push(localId);
       }
@@ -545,13 +579,14 @@ export class Orchestrator {
 
     logger.info("Import created", {
       groupId,
-      count: allLocalIds.length,
+      created: allLocalIds.length,
+      skipped,
       assetName,
     });
 
     return {
       created: allLocalIds.length,
-      skipped: 0,
+      skipped,
       splitGroupId: groupId,
       accountName: assetName,
     };
