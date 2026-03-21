@@ -22,7 +22,7 @@ export function buildMetadata(
 
   if (fxRate != null && fxSource) {
     meta.fx_rate = fxRate;
-    meta.fx_mode = "blue_sell";
+    meta.fx_mode = "blue_buy";
     meta.fx_source = fxSource;
   }
 

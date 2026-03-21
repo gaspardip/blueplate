@@ -22,8 +22,8 @@ export async function fetchBlueRate(): Promise<FXQuote> {
 
     const data = (await resp.json()) as DolarApiResponse;
 
-    if (!data.venta || data.venta <= 0) {
-      throw new FXError("DolarAPI returned invalid venta rate");
+    if (!data.compra || data.compra <= 0) {
+      throw new FXError("DolarAPI returned invalid compra rate");
     }
 
     logger.debug("DolarAPI blue rate fetched", {
@@ -34,7 +34,7 @@ export async function fetchBlueRate(): Promise<FXQuote> {
 
     return {
       pair: "ARS/USD",
-      rate: data.venta,
+      rate: data.compra,
       source: "dolarapi.com",
       sourceTimestamp: data.fechaActualizacion,
       fetchedAt: new Date(),

@@ -157,7 +157,7 @@ export interface BlueplateMetadata {
   original_amount?: number;
   original_currency?: string;
   fx_rate?: number;
-  fx_mode?: "blue_sell";
+  fx_mode?: "blue_buy";
   fx_source?: string;
   telegram_chat_id?: number;
   telegram_message_id?: number;

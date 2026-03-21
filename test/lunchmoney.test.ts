@@ -121,7 +121,7 @@ describe("LunchMoney mapper", () => {
       expect(meta.original_amount).toBe(14500);
       expect(meta.original_currency).toBe("ARS");
       expect(meta.fx_rate).toBe(1425);
-      expect(meta.fx_mode).toBe("blue_sell");
+      expect(meta.fx_mode).toBe("blue_buy");
       expect(meta.fx_source).toBe("dolarapi.com");
     });
   });

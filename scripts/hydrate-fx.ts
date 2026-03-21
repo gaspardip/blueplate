@@ -48,7 +48,7 @@ async function main() {
   let skipped = 0;
 
   for (const rate of rates) {
-    // Use venta (sell) rate — same as what FXService uses from DolarAPI
+    // Use compra (buy) rate — what you'd get selling USD to cover ARS expenses
     const timestamp = `${rate.fecha}T18:00:00.000Z`;
 
     // Skip if we already have a rate for this exact date
@@ -58,7 +58,7 @@ async function main() {
       continue;
     }
 
-    db.saveFxRate("ARS/USD", rate.venta, "argentinadatos-blue", timestamp);
+    db.saveFxRate("ARS/USD", rate.compra, "argentinadatos-blue", timestamp);
     inserted++;
   }
 

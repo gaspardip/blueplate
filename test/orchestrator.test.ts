@@ -124,19 +124,19 @@ describe("Orchestrator", () => {
 
     const result = await orchestrator.process("café 14500 comida", 123, 456);
 
-    expect(result.transaction.amount).toBe(10.18);
+    expect(result.transaction.amount).toBe(10.51);
     expect(result.transaction.currency).toBe("USD");
     expect(result.transaction.originalAmount).toBe(14500);
     expect(result.transaction.originalCurrency).toBe("ARS");
     expect(result.transaction.payee).toBe("Café");
     expect(result.categoryName).toBe("Comida");
-    expect(result.fxRate).toBe(1425);
+    expect(result.fxRate).toBe(1380);
     expect(result.lmTransactionId).toBe(9876);
 
     // Verify stored in DB
     const stored = db.getByExternalId("bp_123_456");
     expect(stored).not.toBeNull();
-    expect(stored!.amount).toBe(10.18);
+    expect(stored!.amount).toBe(10.51);
   });
 
   it("processes a USD expense without conversion", async () => {
@@ -435,16 +435,16 @@ describe("Orchestrator", () => {
       orchestrator = new Orchestrator(db, lm, fx, "ARS");
 
       const transactions = [
-        { date: "2026-03-01", payee: "Test", amount: 14250, currency: "ARS" },
+        { date: "2026-03-01", payee: "Test", amount: 13800, currency: "ARS" },
       ];
 
       const result = await orchestrator.processImport(transactions, 123, 704, 10, "Visa");
       const record = db.getByExternalId("bp_import_123_704_0");
       expect(record).not.toBeNull();
       expect(record!.currency).toBe("USD");
-      expect(record!.original_amount).toBe(14250);
+      expect(record!.original_amount).toBe(13800);
       expect(record!.original_currency).toBe("ARS");
-      expect(record!.amount).toBe(10); // 14250 / 1425
+      expect(record!.amount).toBe(10); // 13800 / 1380
     });
 
     it("uses historical rate for each transaction's date", async () => {
@@ -478,16 +478,16 @@ describe("Orchestrator", () => {
       const lm = new LunchMoneyService("test-key", db, 3600_000);
       orchestrator = new Orchestrator(db, lm, fx, "ARS");
 
-      // No historical rates seeded — will fetch current (1425)
+      // No historical rates seeded — will fetch current (1380)
       const transactions = [
-        { date: "2026-01-15", payee: "Test", amount: 14250, currency: "ARS" },
+        { date: "2026-01-15", payee: "Test", amount: 13800, currency: "ARS" },
       ];
 
       await orchestrator.processImport(transactions, 123, 706, 10, "Visa");
 
       const record = db.getByExternalId("bp_import_123_706_0");
       expect(record).not.toBeNull();
-      expect(record!.fx_rate).toBe(1425); // current rate
+      expect(record!.fx_rate).toBe(1380); // current rate
       expect(record!.amount).toBe(10);
     });
 

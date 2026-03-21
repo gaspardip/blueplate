@@ -36,8 +36,8 @@ describe("FXService", () => {
 
       try {
         const result = await service.convert(14500, "ARS", "USD");
-        expect(result.convertedAmount).toBe(10.18); // 14500 / 1425 = 10.175... → 10.18
-        expect(result.rate).toBe(1425);
+        expect(result.convertedAmount).toBe(10.51); // 14500 / 1380 = 10.507... → 10.51
+        expect(result.rate).toBe(1380);
         expect(result.originalAmount).toBe(14500);
         expect(result.originalCurrency).toBe("ARS");
         expect(result.convertedCurrency).toBe("USD");
