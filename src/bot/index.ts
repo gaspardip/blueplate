@@ -257,6 +257,8 @@ export function createBot(
     const chatId = ctx.chat.id;
     const messageId = ctx.message.message_id;
 
+    await ctx.replyWithChatAction("typing");
+
     let statementResult: StatementResult;
     try {
       const file = await ctx.getFile();
