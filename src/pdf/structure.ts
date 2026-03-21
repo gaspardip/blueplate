@@ -32,7 +32,12 @@ Rules:
 - Output JSON: { "close_date": "YYYY-MM-DD", "transactions": [{ "date": "YYYY-MM-DD", "payee": "...", "amount": ..., "currency": "ARS" }, ...] }
 - close_date: the statement close date (fecha de cierre). Look for "Fecha de Cierre", "Cierre", or the end date of the billing period. null if not found.
 - Dates: convert DD/MM/YYYY or DD/MM/YY to YYYY-MM-DD. Infer the year from context if not explicit.
-- Payee: clean up names — remove trailing codes, IDs, asterisks. Keep the recognizable merchant name.
+- Payee: clean up and normalize names into human-readable form:
+  - Remove trailing codes, IDs, asterisks, branch numbers (e.g. "SUC.42", "STORE 1042")
+  - Expand known abbreviations: MERPAGO/MERCADOPAGO → Mercado Pago, MP*→ Mercado Pago, STA/EST → Estacion
+  - Use proper capitalization (title case), not ALL CAPS
+  - Strip company suffixes like SA, SRL, SAS unless they're the recognizable name
+  - Examples: "MERPAGO*VENDEDOR" → "Mercado Pago", "PEDIDOSYA*MCDONALDS" → "McDonald's", "YPF ESTACION AV.CABILDO" → "YPF", "TELECENTRO SA" → "Telecentro"
 - Amount: positive = expense/charge, negative = credit/payment/refund.
 - Argentine number format: 1.234,56 means one thousand two hundred thirty four point fifty six. Parse accordingly.
 - Skip totals, subtotals, headers, minimum payments, interest rates, and summary lines.
