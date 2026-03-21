@@ -56,22 +56,46 @@ export class LunchMoneyClient {
   }
 
   async createTransaction(payload: LMCreateTransactionPayload): Promise<number> {
+    const ids = await this.createTransactions([payload]);
+    return ids[0];
+  }
+
+  async createTransactions(payloads: LMCreateTransactionPayload[]): Promise<number[]> {
     // v2: POST returns 201 with full transaction objects
     const data = await this.request<LMCreateResponse>("POST", "/transactions", {
-      transactions: [payload],
+      transactions: payloads,
       skip_duplicates: true,
     });
 
-    if (data.transactions && data.transactions.length > 0) {
-      return data.transactions[0].id;
+    // Build ID array in input order. Skipped duplicates have request_transactions_index
+    // to map back to the original position. Created transactions fill remaining slots.
+    const ids: (number | undefined)[] = new Array(payloads.length);
+    const createdIds: number[] = [];
+
+    if (data.skipped_duplicates) {
+      for (const dup of data.skipped_duplicates) {
+        ids[dup.request_transactions_index] = dup.existing_transaction_id;
+      }
     }
 
-    // Check if it was a skipped duplicate
-    if (data.skipped_duplicates && data.skipped_duplicates.length > 0) {
-      return data.skipped_duplicates[0].existing_transaction_id;
+    if (data.transactions) {
+      for (const tx of data.transactions) {
+        createdIds.push(tx.id);
+      }
     }
 
-    throw new LunchMoneyError("No transaction returned from create");
+    // Fill remaining slots with created IDs (in order)
+    let ci = 0;
+    for (let i = 0; i < payloads.length; i++) {
+      if (ids[i] == null) {
+        if (ci >= createdIds.length) {
+          throw new LunchMoneyError(`Expected ${payloads.length} transaction IDs, got ${ci + (data.skipped_duplicates?.length ?? 0)}`);
+        }
+        ids[i] = createdIds[ci++];
+      }
+    }
+
+    return ids as number[];
   }
 
   async updateTransaction(id: number, payload: LMUpdateTransactionPayload): Promise<void> {

@@ -154,7 +154,7 @@ describe("LunchMoneyClient", () => {
 
   it("createTransaction returns ID from skipped_duplicates", async () => {
     globalThis.fetch = mock(() => Promise.resolve(new Response(
-      JSON.stringify({ transactions: [], skipped_duplicates: [{ existing_transaction_id: 99 }] }),
+      JSON.stringify({ transactions: [], skipped_duplicates: [{ request_transactions_index: 0, existing_transaction_id: 99 }] }),
       { status: 201, headers: { "Content-Type": "application/json" } }
     ))) as any;
 
@@ -176,7 +176,7 @@ describe("LunchMoneyClient", () => {
     expect(client.createTransaction({
       payee: "test", amount: "10", currency: "usd", date: "2026-03-17",
       external_id: "bp_1_1", status: "reviewed",
-    })).rejects.toThrow("No transaction returned");
+    })).rejects.toThrow("Expected 1 transaction IDs, got 0");
   });
 
   it("deleteTransaction returns true on 204", async () => {
