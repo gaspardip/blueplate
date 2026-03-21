@@ -16,6 +16,8 @@ const CATEGORY_ALIASES: Record<string, string[]> = {
   "café": ["coffee shops"],
   "cafeteria": ["coffee shops"],
   "cafetería": ["coffee shops"],
+  "desayuno": ["coffee shops"],
+  "merienda": ["coffee shops"],
   "comida": ["restaurants", "groceries"],
   "restaurante": ["restaurants"],
   "resto": ["restaurants"],
@@ -191,7 +193,7 @@ export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutc
   // Match categories and accounts from the END of text tokens.
   // Convention: <payee words...> <category> <account>
   // Must leave at least 1 token for payee.
-  const { categoryHint, matchedIndices: matchedTokenIndices } = matchCategory(textTokens, ctx.categories, new Set());
+  let { categoryHint, matchedIndices: matchedTokenIndices } = matchCategory(textTokens, ctx.categories, new Set());
 
   // Scan from end for account matches
   let assetHint: string | undefined;
@@ -212,6 +214,15 @@ export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutc
   const payee = extractPayee(textTokens, matchedTokenIndices);
   if (!payee) {
     return { ok: false, error: "invalid", message: "No payee found. Try: café 1500" };
+  }
+
+  // If no category was matched via the standard scan, check if the payee itself
+  // is a category alias (e.g., "estacionamiento 14000" → payee is the only text token)
+  if (!categoryHint) {
+    const payeeCategory = fuzzyMatchCategory(payee, ctx.categories);
+    if (payeeCategory) {
+      categoryHint = payeeCategory.name;
+    }
   }
 
   const expense: ParsedExpense = {

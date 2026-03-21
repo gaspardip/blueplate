@@ -65,8 +65,8 @@ export function tokenize(input: string): Token[] {
   let position = 0;
 
   for (let word of words) {
-    // Strip trailing commas (voice transcription produces "15000," "visa,")
-    word = word.replace(/,+$/, "");
+    // Strip trailing punctuation (voice transcription produces "15000," "visa," "desayuno.")
+    word = word.replace(/[.,]+$/, "");
     if (!word) { position++; continue; }
 
     const lower = word.toLowerCase();
