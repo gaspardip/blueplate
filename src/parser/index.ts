@@ -13,4 +13,4 @@ export function parse(text: string, ctx: ResolutionContext): ParseOutcome {
   return buildExpense(tokens, ctx);
 }
 
-export type { ParseOutcome, ParsedExpense, ParseResult, ParseAmbiguous, ParseInvalid } from "./types.js";
+export type { ParseOutcome, ParsedExpense, ParseResult, ParseAmbiguous, ParseInvalid, AccountSplit } from "./types.js";

@@ -1,5 +1,5 @@
 import type { ResolutionContext, CachedCategory, CachedAsset } from "../types.js";
-import type { Token, ParsedExpense, ParseOutcome } from "./types.js";
+import type { Token, ParsedExpense, ParseOutcome, AccountSplit } from "./types.js";
 
 // Strip leading emojis and whitespace from category/asset names for matching
 function stripEmoji(s: string): string {
@@ -135,15 +135,52 @@ export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutc
     }
   }
 
-  // Validate: must have exactly one amount
+  // Validate: must have at least one amount
   if (amounts.length === 0) {
     return { ok: false, error: "invalid", message: "No amount found. Try: pizza 1500" };
   }
+
+  // Multiple amounts: try account-split detection before erroring
   if (amounts.length > 1) {
+    if (splitCount != null) {
+      return { ok: false, error: "ambiguous", message: "Can't combine people-split with multi-account split." };
+    }
+
+    const splitResult = detectAccountSplits(amounts, textTokens, ctx);
+    if (!splitResult) {
+      return {
+        ok: false,
+        error: "ambiguous",
+        message: `Multiple amounts found: ${amounts.map((a) => a.raw).join(", ")}. Send one expense per message.`,
+      };
+    }
+
+    // Build expense from split result
+    const totalAmount = splitResult.total ?? splitResult.legs.reduce((s, l) => s + l.amount, 0);
+    const currency = currencies.length > 0 ? currencies[0].value : undefined;
+    const date = dates.length > 0 ? dates[0].value : undefined;
+
+    // Match category from remaining text tokens (excluding used ones)
+    const remainingTextTokens = textTokens.filter((_, i) => !splitResult.usedTextIndices.has(i));
+    const { categoryHint, matchedIndices: catMatchedIndices } = matchCategory(remainingTextTokens, ctx.categories, new Set());
+
+    const payee = extractPayee(remainingTextTokens, catMatchedIndices);
+    if (!payee) {
+      return { ok: false, error: "invalid", message: "No payee found. Try: café 1500" };
+    }
+
     return {
-      ok: false,
-      error: "ambiguous",
-      message: `Multiple amounts found: ${amounts.map((a) => a.raw).join(", ")}. Send one expense per message.`,
+      ok: true,
+      expense: {
+        amount: totalAmount,
+        currency,
+        payee,
+        categoryHint,
+        tags: tags.map((t) => t.value),
+        note: notes.map((n) => n.value).join(" ") || undefined,
+        date,
+        accountSplits: splitResult.legs,
+      },
     };
   }
 
@@ -154,35 +191,10 @@ export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutc
   // Match categories and accounts from the END of text tokens.
   // Convention: <payee words...> <category> <account>
   // Must leave at least 1 token for payee.
-  let categoryHint: string | undefined;
-  let assetHint: string | undefined;
-  const matchedTokenIndices = new Set<number>();
-
-  // Scan for category: try phrases from end, longest first.
-  // Must leave at least 1 unmatched token for payee.
-  outer:
-  for (let end = textTokens.length - 1; end >= 1 && !categoryHint; end--) {
-    // Try longest phrase ending at `end`, starting from earliest possible position (1, to leave payee)
-    for (let start = 1; start <= end; start++) {
-      const phrase = textTokens
-        .slice(start, end + 1)
-        .map((t) => t.value)
-        .join(" ");
-      const catMatch = fuzzyMatchCategory(phrase, ctx.categories);
-      if (catMatch) {
-        const wouldMatch = new Set(matchedTokenIndices);
-        for (let k = start; k <= end; k++) wouldMatch.add(k);
-        const remaining = textTokens.filter((_, idx) => !wouldMatch.has(idx));
-        if (remaining.length >= 1) {
-          categoryHint = catMatch.name;
-          for (let k = start; k <= end; k++) matchedTokenIndices.add(k);
-          break outer;
-        }
-      }
-    }
-  }
+  const { categoryHint, matchedIndices: matchedTokenIndices } = matchCategory(textTokens, ctx.categories, new Set());
 
   // Scan from end for account matches
+  let assetHint: string | undefined;
   for (let i = textTokens.length - 1; i >= 0 && !assetHint; i--) {
     if (matchedTokenIndices.has(i)) continue;
     const assetMatch = fuzzyMatchAsset(textTokens[i].value, ctx.assets);
@@ -197,15 +209,7 @@ export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutc
     }
   }
 
-  // Remaining tokens = payee
-  const payeeParts: string[] = [];
-  for (let i = 0; i < textTokens.length; i++) {
-    if (!matchedTokenIndices.has(i)) {
-      payeeParts.push(textTokens[i].raw);
-    }
-  }
-
-  const payee = payeeParts.join(" ");
+  const payee = extractPayee(textTokens, matchedTokenIndices);
   if (!payee) {
     return { ok: false, error: "invalid", message: "No payee found. Try: café 1500" };
   }
@@ -223,6 +227,125 @@ export function buildExpense(tokens: Token[], ctx: ResolutionContext): ParseOutc
   };
 
   return { ok: true, expense };
+}
+
+function matchCategory(
+  textTokens: Token[],
+  categories: CachedCategory[],
+  preMatched: Set<number>
+): { categoryHint: string | undefined; matchedIndices: Set<number> } {
+  const matchedIndices = new Set(preMatched);
+  let categoryHint: string | undefined;
+
+  outer:
+  for (let end = textTokens.length - 1; end >= 1 && !categoryHint; end--) {
+    for (let start = 1; start <= end; start++) {
+      const phrase = textTokens.slice(start, end + 1).map((t) => t.value).join(" ");
+      const catMatch = fuzzyMatchCategory(phrase, categories);
+      if (catMatch) {
+        const wouldMatch = new Set(matchedIndices);
+        for (let k = start; k <= end; k++) wouldMatch.add(k);
+        const remaining = textTokens.filter((_, idx) => !wouldMatch.has(idx));
+        if (remaining.length >= 1) {
+          categoryHint = catMatch.name;
+          for (let k = start; k <= end; k++) matchedIndices.add(k);
+          break outer;
+        }
+      }
+    }
+  }
+
+  return { categoryHint, matchedIndices };
+}
+
+function extractPayee(textTokens: Token[], matchedIndices: Set<number>): string {
+  const parts: string[] = [];
+  for (let i = 0; i < textTokens.length; i++) {
+    if (!matchedIndices.has(i)) {
+      parts.push(textTokens[i].raw);
+    }
+  }
+  return parts.join(" ");
+}
+
+interface SplitDetectionResult {
+  legs: AccountSplit[];
+  total?: number;
+  usedTextIndices: Set<number>;
+}
+
+function detectAccountSplits(
+  amounts: Token[],
+  textTokens: Token[],
+  ctx: ResolutionContext
+): SplitDetectionResult | null {
+  const legs: AccountSplit[] = [];
+  const usedTextIndices = new Set<number>();
+  const pairedAmounts = new Set<number>(); // indices into amounts[]
+
+  // Pass 1: pair amounts with immediately preceding text token (compound "mp:5k" pattern)
+  // This is highest priority — the text was glued to the amount.
+  for (let ai = 0; ai < amounts.length; ai++) {
+    const amtPos = amounts[ai].position;
+    const prevTextIdx = textTokens.findIndex((t) => t.position === amtPos - 1);
+    if (prevTextIdx !== -1 && !usedTextIndices.has(prevTextIdx)) {
+      const asset = fuzzyMatchAsset(textTokens[prevTextIdx].value, ctx.assets);
+      if (asset) {
+        legs.push({ assetHint: asset.name, amount: Math.abs(Number(amounts[ai].value)) });
+        usedTextIndices.add(prevTextIdx);
+        pairedAmounts.add(ai);
+      }
+    }
+  }
+
+  // Pass 2: pair remaining amounts with following text tokens (voice "5000 mercado pago" pattern)
+  for (let ai = 0; ai < amounts.length; ai++) {
+    if (pairedAmounts.has(ai)) continue;
+    const amtPos = amounts[ai].position;
+
+    // Try two-token phrase first (e.g., "mercado pago"), then single token
+    for (let len = 2; len >= 1; len--) {
+      const nextIndices: number[] = [];
+      for (let k = 0; k < len; k++) {
+        const idx = textTokens.findIndex((t) => t.position === amtPos + 1 + k);
+        if (idx !== -1 && !usedTextIndices.has(idx)) {
+          nextIndices.push(idx);
+        }
+      }
+      if (nextIndices.length === len) {
+        const phrase = nextIndices.map((i) => textTokens[i].value).join(" ");
+        const asset = fuzzyMatchAsset(phrase, ctx.assets);
+        if (asset) {
+          legs.push({ assetHint: asset.name, amount: Math.abs(Number(amounts[ai].value)) });
+          for (const i of nextIndices) usedTextIndices.add(i);
+          pairedAmounts.add(ai);
+          break;
+        }
+      }
+    }
+  }
+
+  // Unpaired amounts → candidate for total (max 1 allowed)
+  let total: number | undefined;
+  let unpairedCount = 0;
+  for (let ai = 0; ai < amounts.length; ai++) {
+    if (!pairedAmounts.has(ai)) {
+      unpairedCount++;
+      if (unpairedCount > 1) return null;
+      total = Math.abs(Number(amounts[ai].value));
+    }
+  }
+
+  // Need at least 2 legs
+  if (legs.length < 2) return null;
+
+  // Validate total if given
+  if (total != null) {
+    const legSum = legs.reduce((s, l) => s + l.amount, 0);
+    if (Math.abs(legSum - total) > 0.01) return null;
+  }
+
+  return { legs, total, usedTextIndices };
 }
 
 export function fuzzyMatchCategory(input: string, categories: CachedCategory[]): CachedCategory | null {

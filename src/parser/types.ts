@@ -18,6 +18,11 @@ export interface ParseInvalid {
 
 export type ParseOutcome = ParseResult | ParseAmbiguous | ParseInvalid;
 
+export interface AccountSplit {
+  assetHint: string;
+  amount: number;
+}
+
 export interface ParsedExpense {
   amount: number;
   currency?: string;
@@ -28,6 +33,7 @@ export interface ParsedExpense {
   note?: string;
   date?: string; // YYYY-MM-DD or relative like "yesterday"
   splitCount?: number;
+  accountSplits?: AccountSplit[];
 }
 
 export type TokenType =

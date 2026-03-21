@@ -348,4 +348,84 @@ describe("parser", () => {
       expect(result.error).toBe("invalid");
     });
   });
+
+  describe("multi-account splits", () => {
+    it("parses text syntax: pizza 15k mp:5k visa:10k", () => {
+      const result = parse("pizza 15k mp:5k visa:10k", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.payee).toBe("pizza");
+      expect(result.expense.amount).toBe(15000);
+      expect(result.expense.accountSplits).toBeDefined();
+      expect(result.expense.accountSplits!.length).toBe(2);
+      expect(result.expense.accountSplits![0]).toEqual({ assetHint: "Mercado Pago", amount: 5000 });
+      expect(result.expense.accountSplits![1]).toEqual({ assetHint: "Visa", amount: 10000 });
+    });
+
+    it("parses text syntax with category: pizza 15k mp:5k visa:10k comida", () => {
+      const result = parse("pizza 15k mp:5k visa:10k comida", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.payee).toBe("pizza");
+      expect(result.expense.amount).toBe(15000);
+      expect(result.expense.categoryHint).toBe("🍽️ Restaurants");
+      expect(result.expense.accountSplits!.length).toBe(2);
+    });
+
+    it("parses voice syntax: pizza 15000 5000 mercado pago 10000 visa comida", () => {
+      const result = parse("pizza 15000 5000 mercado pago 10000 visa comida", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.payee).toBe("pizza");
+      expect(result.expense.amount).toBe(15000);
+      expect(result.expense.accountSplits!.length).toBe(2);
+      expect(result.expense.accountSplits![0]).toEqual({ assetHint: "Mercado Pago", amount: 5000 });
+      expect(result.expense.accountSplits![1]).toEqual({ assetHint: "Visa", amount: 10000 });
+    });
+
+    it("works without total (total = sum of legs)", () => {
+      const result = parse("pizza mp:5k visa:10k", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(15000);
+      expect(result.expense.accountSplits!.length).toBe(2);
+    });
+
+    it("errors when legs don't sum to total", () => {
+      const result = parse("pizza 20k mp:5k visa:10k", ctx);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBe("ambiguous");
+    });
+
+    it("errors when combining split and multi-account", () => {
+      const result = parse("pizza 15k mp:5k visa:10k split 2", ctx);
+      expect(result.ok).toBe(false);
+    });
+
+    it("only 1 leg detected falls back to ambiguous", () => {
+      // Only one amount has an adjacent asset
+      const result = parse("pizza 15k mp:5k 10k", ctx);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBe("ambiguous");
+    });
+
+    it("strips trailing commas from voice tokens", () => {
+      const result = parse("pizza 15000, 5000 mercado pago, 10000 visa, comida", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.payee).toBe("pizza");
+      expect(result.expense.accountSplits!.length).toBe(2);
+    });
+
+    it("preserves tags and notes with multi-account", () => {
+      const result = parse("pizza 15k mp:5k visa:10k #delivery note:compartida", ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.tags).toEqual(["delivery"]);
+      expect(result.expense.note).toBe("compartida");
+      expect(result.expense.accountSplits!.length).toBe(2);
+    });
+  });
 });

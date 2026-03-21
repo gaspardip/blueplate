@@ -47,13 +47,42 @@ function formatDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+const AMOUNT_RE = /^-?\$?([\d]+(?:[.,]\d{3})*(?:[.,]\d{1,2})?[kmKM]?)$|^-?\$?([\d]+(?:[.,]\d+)?[kmKM]?)$/;
+
+function tryParseAmount(word: string): { value: number; raw: string } | null {
+  const match = word.match(AMOUNT_RE);
+  if (!match) return null;
+  const isNegative = word.startsWith("-");
+  const raw = (match[1] || match[2] || "").replace(/\$/g, "");
+  const parsed = parseAmount(raw);
+  if (parsed === null) return null;
+  return { value: isNegative ? -parsed : parsed, raw: word };
+}
+
 export function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
   const words = input.trim().split(/\s+/);
   let position = 0;
 
-  for (const word of words) {
+  for (let word of words) {
+    // Strip trailing commas (voice transcription produces "15000," "visa,")
+    word = word.replace(/,+$/, "");
+    if (!word) { position++; continue; }
+
     const lower = word.toLowerCase();
+
+    // Compound text:amount token (e.g., "mp:5k" → text "mp" + amount 5000)
+    const compoundMatch = word.match(/^([a-zA-Z\u00C0-\u024F]+):(.+)$/);
+    if (compoundMatch && !lower.startsWith("note:") && !lower.startsWith("date:")) {
+      const amt = tryParseAmount(compoundMatch[2]);
+      if (amt) {
+        tokens.push({ type: "text", value: compoundMatch[1], raw: compoundMatch[1], position });
+        position++;
+        tokens.push({ type: "amount", value: String(amt.value), raw: compoundMatch[2], position });
+        position++;
+        continue;
+      }
+    }
 
     // Tag: #something
     if (lower.startsWith("#") && lower.length > 1) {
@@ -99,18 +128,11 @@ export function tokenize(input: string): Token[] {
     }
 
     // Amount: optional -/$ prefix, digits with commas/dots, k/m suffix
-    // Match: 1500, 1.500, 14,500, $1500, 12.50, 500k, 1.5m, $2M, -7500, -500k
-    const amountMatch = word.match(/^-?\$?([\d]+(?:[.,]\d{3})*(?:[.,]\d{1,2})?[kmKM]?)$|^-?\$?([\d]+(?:[.,]\d+)?[kmKM]?)$/);
-    if (amountMatch) {
-      const isNegative = word.startsWith("-");
-      const raw = (amountMatch[1] || amountMatch[2] || "").replace(/\$/g, "");
-      const parsed = parseAmount(raw);
-      if (parsed !== null) {
-        const value = isNegative ? -parsed : parsed;
-        tokens.push({ type: "amount", value: String(value), raw: word, position });
-        position++;
-        continue;
-      }
+    const amt = tryParseAmount(word);
+    if (amt) {
+      tokens.push({ type: "amount", value: String(amt.value), raw: word, position });
+      position++;
+      continue;
     }
 
     // Currency
