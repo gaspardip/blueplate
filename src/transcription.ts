@@ -6,7 +6,7 @@ export async function transcribe(buffer: ArrayBuffer, apiKey: string): Promise<s
   const form = new FormData();
   form.append("file", blob, "voice.ogg");
   form.append("model", "gpt-4o-mini-transcribe");
-  form.append("prompt", "Output numbers as digits, not words. Examples: starbucks 8000, uber 12.50 dólares, pizza 15000 pesos visa, paula 12000 desayuno");
+  form.append("prompt", "Output numbers as digits, not words. Examples: starbucks 8000, uber 12.50 dólares, pizza 15000 pesos visa, paula 12000 desayuno, pizza 15000 5000 mercado pago 10000 visa comida");
 
   const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
