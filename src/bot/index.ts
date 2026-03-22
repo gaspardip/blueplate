@@ -35,6 +35,15 @@ function receiptKeyboardId(result: ProcessResult): number | undefined {
   return result.splitGroupId ?? result.localRecordId;
 }
 
+async function downloadTelegramFile(ctx: { getFile: () => Promise<{ file_path?: string }> }, botToken: string): Promise<ArrayBuffer> {
+  const file = await ctx.getFile();
+  if (!file.file_path) throw new Error("No file path returned");
+  const url = `https://api.telegram.org/file/bot${botToken}/${file.file_path}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+  return resp.arrayBuffer();
+}
+
 interface PendingImport {
   result: StatementResult;
   usdPreview: Array<{ usdAmount: number; rate: number; isConverted: boolean }>;
@@ -65,7 +74,7 @@ export function createBot(
   // Dedup: Telegram retries webhook updates if the handler is slow (e.g., PDF processing).
   // Drop updates we've already seen.
   const seenUpdates = new Set<number>();
-  setInterval(() => seenUpdates.clear(), 60_000);
+  setInterval(() => seenUpdates.clear(), 5 * 60_000);
   bot.use(async (ctx, next) => {
     if (seenUpdates.has(ctx.update.update_id)) return;
     seenUpdates.add(ctx.update.update_id);
@@ -189,9 +198,13 @@ export function createBot(
         pendingImports.delete(importKey);
 
         const text = formatImportResult(result.created, result.skipped, result.accountName);
-        const { InlineKeyboard } = await import("grammy");
-        const undoKb = new InlineKeyboard().text("Undo All", `undo:${result.splitGroupId}`);
-        await ctx.editMessageText(text, { reply_markup: undoKb });
+        if (result.created > 0) {
+          const { InlineKeyboard } = await import("grammy");
+          const undoKb = new InlineKeyboard().text("Undo All", `undo:${result.splitGroupId}`);
+          await ctx.editMessageText(text, { reply_markup: undoKb });
+        } else {
+          await ctx.editMessageText(text);
+        }
       } catch (error) {
         logger.error("Import failed", { error: String(error) });
         await ctx.editMessageText("Failed to create transactions. Try again.");
@@ -265,13 +278,7 @@ export function createBot(
 
     let statementResult: StatementResult;
     try {
-      const file = await ctx.getFile();
-      if (!file.file_path) throw new Error("No file path returned");
-      const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
-      const buffer = await resp.arrayBuffer();
-
+      const buffer = await downloadTelegramFile(ctx, config.telegramBotToken);
       const text = await extractPdfText(buffer);
       statementResult = await structureStatement(text, config.openaiApiKey);
     } catch (error) {
@@ -311,12 +318,7 @@ export function createBot(
 
     let text: string;
     try {
-      const file = await ctx.getFile();
-      if (!file.file_path) throw new Error("No file path returned");
-      const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
-      const buffer = await resp.arrayBuffer();
+      const buffer = await downloadTelegramFile(ctx, config.telegramBotToken);
       text = await transcribe(buffer, config.openaiApiKey);
       logger.info("Voice transcribed", { chatId, text });
     } catch (error) {

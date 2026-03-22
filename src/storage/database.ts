@@ -365,7 +365,7 @@ export class BlueplateDatabase {
   getRateNearDate(pair: string, date: string): FxRateRow | null {
     // Find the rate whose source_timestamp is closest to the given date.
     // source_timestamp is the actual date of the rate (not when we fetched it).
-    const target = `${date}T23:59:59`;
+    const target = `${date}T23:59:59Z`;
     const before = this.db
       .query<FxRateRow, [string, string]>(
         `SELECT * FROM fx_rates WHERE pair = ? AND source_timestamp <= ?

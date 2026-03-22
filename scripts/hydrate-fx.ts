@@ -48,7 +48,7 @@ async function main() {
   let skipped = 0;
 
   for (const rate of rates) {
-    // Use compra (buy) rate — what you'd get selling USD to cover ARS expenses
+    // Use compra rate — the rate the market pays to buy your USD
     const timestamp = `${rate.fecha}T18:00:00.000Z`;
 
     // Skip if we already have a rate for this exact date
