@@ -582,6 +582,31 @@ describe("Orchestrator", () => {
       expect(result.skipped).toBe(2);
       expect(result.created).toBe(0);
     });
+
+    it("previewImport marks ARS as converted and USD as not", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "Carrefour", amount: 13800, currency: "ARS" },
+        { date: "2026-03-02", payee: "Apple.com", amount: 149.99, currency: "USD" },
+        { date: "2026-03-03", payee: "Netflix", amount: 17.78, currency: "USD" },
+      ];
+
+      const preview = await orchestrator.previewImport(transactions);
+
+      expect(preview).toHaveLength(3);
+      // ARS → converted
+      expect(preview[0].isConverted).toBe(true);
+      expect(preview[0].usdAmount).toBe(10); // 13800 / 1380
+      // USD → not converted, amount passed through
+      expect(preview[1].isConverted).toBe(false);
+      expect(preview[1].usdAmount).toBe(149.99);
+      expect(preview[2].isConverted).toBe(false);
+      expect(preview[2].usdAmount).toBe(17.78);
+    });
   });
 
   function setupMockFetchWithAccounts() {

@@ -155,6 +155,46 @@ describe("PDF import integration", () => {
       expect(havannaIdx).toBeLessThan(mlIdx);
     });
 
+    it("formatImportSummary shows USD charges without redundant conversion", () => {
+      const mixedTxns: StatementTransaction[] = [
+        { date: "2025-02-01", payee: "Carrefour", amount: 22150.75, currency: "ARS" },
+        { date: "2025-02-03", payee: "Apple.com", amount: 149.99, currency: "USD" },
+        { date: "2025-02-05", payee: "Netflix", amount: 17.78, currency: "USD" },
+        { date: "2025-02-10", payee: "YPF", amount: 18500, currency: "ARS" },
+      ];
+      const usdPreview = [
+        { usdAmount: 22150.75 / 1400, rate: 1400, isConverted: true },
+        { usdAmount: 149.99, rate: 1400, isConverted: false },
+        { usdAmount: 17.78, rate: 1400, isConverted: false },
+        { usdAmount: 18500 / 1400, rate: 1400, isConverted: true },
+      ];
+      const summary = formatImportSummary(mixedTxns, usdPreview);
+
+      // ARS charges show ARS amount + ($USD)
+      expect(summary).toContain("Carrefour — 22,150.75 ($");
+      expect(summary).toContain("YPF — 18,500 ($");
+
+      // USD charges show $USD amount without ARS
+      expect(summary).toContain("Apple.com — $149.99 USD");
+      expect(summary).toContain("Netflix — $17.78 USD");
+    });
+
+    it("formatImportSummary handles negative amounts (credits)", () => {
+      const txns: StatementTransaction[] = [
+        { date: "2025-02-01", payee: "Refund", amount: -5000, currency: "ARS" },
+        { date: "2025-02-02", payee: "Purchase", amount: 10000, currency: "ARS" },
+      ];
+      const usdPreview = [
+        { usdAmount: -5000 / 1400, rate: 1400, isConverted: true },
+        { usdAmount: 10000 / 1400, rate: 1400, isConverted: true },
+      ];
+      const summary = formatImportSummary(txns, usdPreview);
+
+      // Both should show absolute values
+      expect(summary).toContain("Refund — 5,000");
+      expect(summary).toContain("Purchase — 10,000");
+    });
+
     it("formatImportSummary works without USD preview", () => {
       const summary = formatImportSummary(EXPECTED_TRANSACTIONS);
 

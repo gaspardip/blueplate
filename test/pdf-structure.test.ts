@@ -102,6 +102,49 @@ describe("structureStatement", () => {
     expect(structureStatement("text", "test-key")).rejects.toThrow("No transactions found");
   });
 
+  it("handles mixed ARS and USD transactions", async () => {
+    const llmResponse = JSON.stringify({
+      close_date: "2025-02-28",
+      transactions: [
+        { date: "2025-02-01", payee: "Carrefour", amount: 22150.75, currency: "ARS" },
+        { date: "2025-02-03", payee: "Apple.com", amount: 149.99, currency: "USD" },
+        { date: "2025-02-05", payee: "Netflix", amount: 17.78, currency: "USD" },
+        { date: "2025-02-10", payee: "YPF", amount: 18500, currency: "ARS" },
+      ],
+    });
+    mockOpenAI(llmResponse);
+
+    const result = await structureStatement("text", "test-key");
+
+    expect(result.transactions).toHaveLength(4);
+    expect(result.transactions[0].currency).toBe("ARS");
+    expect(result.transactions[1].currency).toBe("USD");
+    expect(result.transactions[1].amount).toBe(149.99);
+    expect(result.transactions[2].currency).toBe("USD");
+    expect(result.closeDate).toBe("2025-02-28");
+  });
+
+  it("system prompt includes date carry-forward instructions", async () => {
+    const llmResponse = JSON.stringify({
+      transactions: [{ date: "2025-01-25", payee: "Test", amount: 100 }],
+    });
+    globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      const systemPrompt = body.messages[0].content;
+      expect(systemPrompt).toContain("carry forward");
+      expect(systemPrompt).toContain("PLATFORM*MERCHANT");
+      expect(systemPrompt).toContain("two amount columns");
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: llmResponse } }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }) as any;
+
+    await structureStatement("text", "test-key");
+  });
+
   it("uses gpt-4o-mini model with json_object response format", async () => {
     const llmResponse = JSON.stringify({
       transactions: [{ date: "2026-03-01", payee: "Test", amount: 100 }],
