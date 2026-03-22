@@ -1,6 +1,25 @@
-# Agent Guide
+# Blueplate
 
-Map of the codebase. Read the relevant doc before working in that area.
+Telegram-first expense ingestion for Lunch Money. ARS → USD via blue dollar compra rate.
+
+## Commands
+
+```bash
+bun run start        # start bot
+bun run dev          # start bot with watch mode
+bun test             # run tests
+bun run typecheck    # type check
+```
+
+## Tech Stack
+
+- **Runtime**: Bun (native SQLite via `bun:sqlite`)
+- **Telegram**: grammY
+- **Lunch Money**: Custom typed fetch client (v2 API only)
+- **FX**: DolarAPI.com (live) + ArgentinaDatos (historical) → compra rate
+- **PDF**: unpdf (extraction) + gpt-4o-mini (structuring)
+- **Validation**: zod
+- **Testing**: `bun test`
 
 ## Architecture
 
@@ -45,6 +64,16 @@ Import:  PDF → extract text → LLM structure → preview → confirm → per-
 - **Undo via split_group_id.** Multi-leg operations (imports, account splits) share a group ID. Undo deletes all legs.
 - **PDF import dedup.** Skip imported transactions where a manual entry with same amount + date exists.
 - **Historical FX per transaction.** PDF imports use the rate from each transaction's date, not today's rate.
+- Single-user bot — no multi-tenancy considerations.
+
+## Conventions
+
+- CalVer versioning (YYYY.M.D)
+- Structured JSON logging
+- `external_id` patterns: `bp_{chatId}_{msgId}` (manual), `bp_import_{chatId}_{msgId}_{i}` (PDF import)
+- `status: "reviewed"` for manual entries, `"unreviewed"` for PDF imports
+- Metadata stored as `custom_metadata` on LM transactions (BlueplateMetadata schema)
+- All config via env vars, validated with zod at startup (`src/config.ts`)
 
 ## Testing
 
