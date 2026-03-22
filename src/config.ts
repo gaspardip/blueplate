@@ -5,7 +5,7 @@ const configSchema = z.object({
   lunchMoneyApiKey: z.string().min(1),
   dbPath: z.string().default("./data/blueplate.db"),
   defaultCurrency: z.string().default("ARS"),
-  mode: z.enum(["polling", "webhook"]).default("polling"),
+  mode: z.enum(["polling", "webhook"]).default("webhook"),
   webhookUrl: z.string().optional(),
   webhookPort: z.coerce.number().default(3000),
   allowedChatIds: z
