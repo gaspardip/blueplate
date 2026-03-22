@@ -592,6 +592,18 @@ export class Orchestrator {
     };
   }
 
+  async previewImport(
+    transactions: StatementTransaction[],
+  ): Promise<Array<{ usdAmount: number; rate: number }>> {
+    const fallbackFx = await this.resolveImportFxRate();
+    return transactions.map((stx) => {
+      const currency = stx.currency ?? this.defaultCurrency;
+      const fx = this.resolveRateForDate(stx.date) ?? fallbackFx;
+      const result = this.convertAtRate(stx.amount, currency, fx);
+      return { usdAmount: result.amount, rate: result.fxRate ?? fx.rate };
+    });
+  }
+
   private resolveRateForDate(date: string): { rate: number; source: string } | null {
     const historical = this.db.getRateNearDate("ARS/USD", date);
     if (!historical) return null;

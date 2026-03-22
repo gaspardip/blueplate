@@ -133,16 +133,29 @@ describe("PDF import integration", () => {
   });
 
   describe("formatters", () => {
-    it("formatImportSummary shows transaction count, date range, and samples", () => {
-      const summary = formatImportSummary(EXPECTED_TRANSACTIONS);
+    it("formatImportSummary shows all transactions with USD when preview provided", () => {
+      const usdPreview = EXPECTED_TRANSACTIONS.map((t) => ({
+        usdAmount: t.amount / 1400,
+        rate: 1400,
+      }));
+      const summary = formatImportSummary(EXPECTED_TRANSACTIONS, usdPreview);
 
       expect(summary).toContain("23 transactions");
       expect(summary).toContain("2026-03-03");
       expect(summary).toContain("2026-03-21");
       expect(summary).toContain("Mercado Libre");
       expect(summary).toContain("Netflix");
-      // Only 5 samples shown
-      expect(summary).toContain("... and 18 more");
+      expect(summary).toContain("Havanna"); // last transaction shown too
+      expect(summary).toContain("$"); // USD amounts present
+      expect(summary).toContain("USD"); // total USD in header
+    });
+
+    it("formatImportSummary works without USD preview", () => {
+      const summary = formatImportSummary(EXPECTED_TRANSACTIONS);
+
+      expect(summary).toContain("23 transactions");
+      expect(summary).toContain("Mercado Libre");
+      expect(summary).not.toContain("USD");
     });
 
     it("formatImportResult shows created count and account", () => {

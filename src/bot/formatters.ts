@@ -216,29 +216,35 @@ export function formatFxRate(
   return lines.join("\n");
 }
 
-export function formatImportSummary(transactions: StatementTransaction[]): string {
+export function formatImportSummary(
+  transactions: StatementTransaction[],
+  usdPreview?: Array<{ usdAmount: number; rate: number }>,
+): string {
   const dates = transactions.map((t) => t.date).sort();
   const dateRange = dates[0] === dates[dates.length - 1]
     ? dates[0]
     : `${dates[0]} — ${dates[dates.length - 1]}`;
 
-  const total = transactions.reduce((s, t) => s + Math.abs(t.amount), 0);
+  const arsTotal = transactions.reduce((s, t) => s + Math.abs(t.amount), 0);
   const currency = transactions[0]?.currency ?? "ARS";
 
-  const sample = transactions.slice(0, 5);
-  const sampleLines = sample.map(
-    (t) => `  ${t.date.slice(5)} ${t.payee} — ${formatNumber(Math.abs(t.amount))}`,
-  );
-  if (transactions.length > 5) {
-    sampleLines.push(`  ... and ${transactions.length - 5} more`);
+  const lines = transactions.map((t, i) => {
+    const usd = usdPreview?.[i];
+    const arsStr = formatNumber(Math.abs(t.amount));
+    if (usd) {
+      return `  ${t.date.slice(5)} ${t.payee} — ${arsStr} ($${Math.abs(usd.usdAmount).toFixed(2)})`;
+    }
+    return `  ${t.date.slice(5)} ${t.payee} — ${arsStr}`;
+  });
+
+  const header = [`PDF Import: ${transactions.length} transactions`, `${dateRange} | ${currency} ${formatNumber(arsTotal)}`];
+
+  if (usdPreview) {
+    const usdTotal = usdPreview.reduce((s, u) => s + Math.abs(u.usdAmount), 0);
+    header[1] += ` ($${usdTotal.toFixed(2)} USD)`;
   }
 
-  return [
-    `PDF Import: ${transactions.length} transactions`,
-    `${dateRange} | ${currency} ${formatNumber(total)}`,
-    "",
-    ...sampleLines,
-  ].join("\n");
+  return [...header, "", ...lines].join("\n");
 }
 
 export function formatImportResult(created: number, skipped: number, accountName: string): string {

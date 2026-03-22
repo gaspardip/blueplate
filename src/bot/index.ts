@@ -37,6 +37,7 @@ function receiptKeyboardId(result: ProcessResult): number | undefined {
 
 interface PendingImport {
   result: StatementResult;
+  usdPreview: Array<{ usdAmount: number; rate: number }>;
   createdAt: number;
 }
 
@@ -153,7 +154,7 @@ export function createBot(
       }
       const accounts = await lm.getAccounts();
       const keyboard = buildImportKeyboard(importKey, accounts, assetId);
-      const summary = formatImportSummary(pending.result.transactions);
+      const summary = formatImportSummary(pending.result.transactions, pending.usdPreview);
       await ctx.editMessageText(summary, { reply_markup: keyboard });
       await ctx.answerCallbackQuery();
       return;
@@ -295,10 +296,11 @@ export function createBot(
       return;
     }
 
+    const usdPreview = await orchestrator.previewImport(statementResult.transactions);
     const importKey = `${chatId}:${messageId}`;
-    pendingImports.set(importKey, { result: statementResult, createdAt: Date.now() });
+    pendingImports.set(importKey, { result: statementResult, usdPreview, createdAt: Date.now() });
 
-    const summary = formatImportSummary(statementResult.transactions);
+    const summary = formatImportSummary(statementResult.transactions, usdPreview);
     const accounts = await lm.getAccounts();
     const keyboard = buildImportKeyboard(importKey, accounts);
     await ctx.reply(summary + "\n\nSelect account:", { reply_markup: keyboard });
