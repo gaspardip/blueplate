@@ -44,20 +44,19 @@ async function main() {
   const rates = allRates.filter((r) => r.fecha >= since);
   console.log(`Fetched ${allRates.length} total, using ${rates.length} from ${since}`);
 
+  // Single query for all existing dates — avoids N+1
+  const existingDates = db.getExistingFxDates("ARS/USD");
   let inserted = 0;
   let skipped = 0;
 
   for (const rate of rates) {
-    // Use compra rate — the rate the market pays to buy your USD
-    const timestamp = `${rate.fecha}T18:00:00.000Z`;
-
-    // Skip if we already have a rate for this exact date
-    const existing = db.getRateNearDate("ARS/USD", rate.fecha);
-    if (existing && existing.source_timestamp.startsWith(rate.fecha)) {
+    if (existingDates.has(rate.fecha)) {
       skipped++;
       continue;
     }
 
+    // Use compra rate — the rate the market pays to buy your USD
+    const timestamp = `${rate.fecha}T18:00:00.000Z`;
     db.saveFxRate("ARS/USD", rate.compra, "argentinadatos-blue", timestamp);
     inserted++;
   }

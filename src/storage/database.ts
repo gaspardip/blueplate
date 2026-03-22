@@ -236,10 +236,13 @@ export class BlueplateDatabase {
       .run(id);
   }
 
-  setSplitGroupId(id: number, groupId: number): void {
+  setSplitGroupId(ids: number | number[], groupId: number): void {
+    const idList = Array.isArray(ids) ? ids : [ids];
+    if (idList.length === 0) return;
+    const placeholders = idList.map(() => "?").join(", ");
     this.db
-      .query("UPDATE transactions SET split_group_id = ? WHERE id = ?")
-      .run(groupId, id);
+      .query(`UPDATE transactions SET split_group_id = ? WHERE id IN (${placeholders})`)
+      .run(groupId, ...idList);
   }
 
   getByGroupId(groupId: number): TransactionRow[] {
@@ -360,6 +363,15 @@ export class BlueplateDatabase {
         )
         .get(pair) ?? null
     );
+  }
+
+  getExistingFxDates(pair: string): Set<string> {
+    const rows = this.db
+      .query<{ d: string }, [string]>(
+        "SELECT DISTINCT substr(source_timestamp, 1, 10) as d FROM fx_rates WHERE pair = ?",
+      )
+      .all(pair);
+    return new Set(rows.map((r) => r.d));
   }
 
   getRateNearDate(pair: string, date: string): FxRateRow | null {

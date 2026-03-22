@@ -364,9 +364,7 @@ export class Orchestrator {
 
     // Set split_group_id on all records (use first record's id)
     const groupId = localRecordIds[0];
-    for (const id of localRecordIds) {
-      this.db.setSplitGroupId(id, groupId);
-    }
+    this.db.setSplitGroupId(localRecordIds, groupId);
 
     // Build result
     const accountLegs: AccountLeg[] = splits.map((leg, i) => ({
@@ -577,9 +575,7 @@ export class Orchestrator {
 
     // Link all records via split_group_id for undo-all
     const groupId = allLocalIds[0];
-    for (const id of allLocalIds) {
-      this.db.setSplitGroupId(id, groupId);
-    }
+    this.db.setSplitGroupId(allLocalIds, groupId);
 
     logger.info("Import created", {
       groupId,
