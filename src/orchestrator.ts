@@ -10,7 +10,8 @@ import { fuzzyMatchCategory, fuzzyMatchAsset } from "./parser/grammar.js";
 import type { BlueplateDatabase, TransactionRow } from "./storage/database.js";
 import type { Transaction, ResolutionContext, CachedCategory, CachedAsset } from "./types.js";
 import type { ParsedExpense } from "./parser/types.js";
-import type { LMCreateTransactionPayload } from "./lunchmoney/types.js";
+import type { LMCreateTransactionPayload, LMUpdateTransactionPayload } from "./lunchmoney/types.js";
+import { todayStr } from "./utils.js";
 import type { StatementTransaction } from "./pdf/index.js";
 
 export interface AccountLeg {
@@ -38,7 +39,7 @@ export interface ProcessResult {
 export interface ImportResult {
   created: number;
   skipped: number;
-  splitGroupId: number;
+  splitGroupId: number | null;
   accountName: string;
 }
 
@@ -194,7 +195,7 @@ export class Orchestrator {
     }
 
     const currency = input.currency ?? this.defaultCurrency;
-    const date = input.date ?? new Date().toISOString().slice(0, 10);
+    const date = input.date ?? todayStr();
     const normalizedPayee = this.payee.normalize(input.payee);
 
     // Resolve category
@@ -275,7 +276,7 @@ export class Orchestrator {
   ): Promise<ProcessResult> {
     const splits = expense.accountSplits!;
     const currency = expense.currency ?? this.defaultCurrency;
-    const date = expense.date ?? new Date().toISOString().slice(0, 10);
+    const date = expense.date ?? todayStr();
     const normalizedPayee = this.payee.normalize(expense.payee);
 
     // Resolve category
@@ -518,7 +519,7 @@ export class Orchestrator {
       return {
         created: 0,
         skipped,
-        splitGroupId: 0,
+        splitGroupId: null,
         accountName: assetName,
       };
     }
@@ -654,16 +655,18 @@ export class Orchestrator {
     let record;
     if (targetRecordId != null) {
       record = this.db.getById(targetRecordId);
-    }
-    if (!record) {
+      if (!record) {
+        throw new BlueplateError("That transaction was already undone.", "NO_AMEND", false);
+      }
+    } else {
       record = this.db.getLastUndoable(chatId);
-    }
-    if (!record) {
-      throw new BlueplateError("Nothing to amend.", "NO_AMEND", false);
+      if (!record) {
+        throw new BlueplateError("Nothing to amend.", "NO_AMEND", false);
+      }
     }
 
     const ctx = await this.getResolutionContext();
-    const updates: Record<string, unknown> = {};
+    const lmUpdate: LMUpdateTransactionPayload = {};
 
     // Resolve new amount (with FX if needed)
     let newAmount = record.amount;
@@ -678,7 +681,7 @@ export class Orchestrator {
       newOriginalAmount = fxResult.originalAmount ?? null;
       fxRate = fxResult.fxRate ?? null;
       fxSource = fxResult.fxSource ?? null;
-      updates.amount = newAmount.toFixed(2);
+      lmUpdate.amount = newAmount.toFixed(2);
     }
 
     // Resolve new category
@@ -687,7 +690,7 @@ export class Orchestrator {
       const match = this.resolveCategory(corrections.categoryHint, ctx.categories);
       if (match) {
         categoryName = match.name;
-        updates.category_id = match.id;
+        lmUpdate.category_id = match.id;
       }
     }
 
@@ -697,7 +700,7 @@ export class Orchestrator {
       const match = this.resolveAsset(corrections.assetHint, ctx.assets);
       if (match) {
         assetName = match.name;
-        updates.manual_account_id = match.id;
+        lmUpdate.manual_account_id = match.id;
       }
     }
 
@@ -705,15 +708,15 @@ export class Orchestrator {
     let payeeName = record.payee;
     if (corrections.payee) {
       payeeName = this.payee.normalize(corrections.payee);
-      updates.payee = payeeName;
+      lmUpdate.payee = payeeName;
     }
 
-    if (Object.keys(updates).length === 0) {
+    if (Object.keys(lmUpdate).length === 0) {
       throw new BlueplateError("No valid corrections found.", "NO_CORRECTIONS", false);
     }
 
     // Update in LM
-    await this.lm.rawClient.updateTransaction(record.lm_transaction_id, updates as any);
+    await this.lm.rawClient.updateTransaction(record.lm_transaction_id, lmUpdate);
 
     // Update local record
     this.db.updateTransactionFields(record.id, {
@@ -725,7 +728,7 @@ export class Orchestrator {
       fxRate: corrections.amount != null ? (fxRate ?? undefined) : undefined,
       fxSource: corrections.amount != null ? (fxSource ?? undefined) : undefined,
     });
-    logger.info("Transaction amended", { lmId: record.lm_transaction_id, updates });
+    logger.info("Transaction amended", { lmId: record.lm_transaction_id, lmUpdate });
 
     return {
       transaction: {

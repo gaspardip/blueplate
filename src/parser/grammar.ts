@@ -1,12 +1,6 @@
 import type { ResolutionContext, CachedCategory, CachedAsset } from "../types.js";
 import type { Token, ParsedExpense, ParseOutcome, AccountSplit } from "./types.js";
-
-// Strip leading emojis and whitespace from category/asset names for matching
-function stripEmoji(s: string): string {
-  return s
-    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
-    .trim();
-}
+import { stripEmoji } from "../utils.js";
 
 // Spanish (and common shorthand) aliases → English category name fragments
 // Used for fuzzy matching when the user types in Spanish

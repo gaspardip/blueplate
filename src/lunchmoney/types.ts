@@ -129,8 +129,8 @@ export interface LMSkippedDuplicate {
 }
 
 export interface LMCreateResponse {
-  transactions: LMTransaction[];
-  skipped_duplicates: LMSkippedDuplicate[];
+  transactions: LMTransaction[] | null;
+  skipped_duplicates: LMSkippedDuplicate[] | null;
 }
 
 export interface LMCategoriesResponse {

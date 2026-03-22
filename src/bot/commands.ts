@@ -1,7 +1,9 @@
 import type { Context } from "grammy";
 import type { Orchestrator } from "../orchestrator.js";
 import type { LunchMoneyService } from "../lunchmoney/index.js";
+import { fetchBlueRateRaw } from "../fx/dolar-api.js";
 import { PayeeNormalizer } from "../payee.js";
+import { todayStr, yearMonthStr } from "../utils.js";
 import type { BlueplateDatabase } from "../storage/database.js";
 import {
   formatAssets,
@@ -18,7 +20,7 @@ import {
 export function createCommandHandlers(
   orchestrator: Orchestrator,
   lm: LunchMoneyService,
-  db: BlueplateDatabase
+  db: BlueplateDatabase,
 ) {
   return {
     start: async (ctx: Context) => {
@@ -70,14 +72,14 @@ export function createCommandHandlers(
 
     today: async (ctx: Context) => {
       const chatId = ctx.chat!.id;
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayStr();
       const rows = db.getTransactionsForDate(chatId, today);
       await ctx.reply(formatDaySummary(rows, today));
     },
 
     month: async (ctx: Context) => {
       const chatId = ctx.chat!.id;
-      const yearMonth = new Date().toISOString().slice(0, 7);
+      const yearMonth = yearMonthStr();
       const rows = db.getTransactionsForMonth(chatId, yearMonth);
       await ctx.reply(formatMonthSummary(rows, yearMonth));
     },
@@ -166,8 +168,7 @@ export function createCommandHandlers(
     },
 
     fx: async (ctx: Context) => {
-      const resp = await fetch("https://dolarapi.com/v1/dolares/blue");
-      const data = await resp.json() as { compra: number; venta: number; fechaActualizacion: string };
+      const data = await fetchBlueRateRaw();
       const history = db.getRecentFxRates("ARS/USD", 5);
       await ctx.reply(formatFxRate(data, history));
     },

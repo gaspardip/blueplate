@@ -2,6 +2,7 @@ import type { Bot } from "grammy";
 import { logger } from "./logger.js";
 import type { BlueplateDatabase } from "./storage/database.js";
 import { formatDaySummary, formatWeeklySummary } from "./bot/formatters.js";
+import { todayStr } from "./utils.js";
 
 export class DailyDigest {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -43,7 +44,7 @@ export class DailyDigest {
   }
 
   private async send(): Promise<void> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayStr();
 
     for (const chatId of this.chatIds) {
       try {

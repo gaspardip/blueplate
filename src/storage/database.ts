@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS fx_rates (
 CREATE INDEX IF NOT EXISTS idx_fx_rates_pair_source_ts
   ON fx_rates (pair, source_timestamp);
 
+CREATE INDEX IF NOT EXISTS idx_tx_chat_undone
+  ON transactions (telegram_chat_id, undone, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_tx_chat_date
+  ON transactions (telegram_chat_id, date, undone);
+
 CREATE TABLE IF NOT EXISTS user_defaults (
   telegram_chat_id INTEGER PRIMARY KEY,
   default_currency TEXT NOT NULL DEFAULT 'ARS',
@@ -272,13 +278,15 @@ export class BlueplateDatabase {
   // --- LM Categories ---
 
   upsertCategories(categories: { id: number; name: string; isIncome: boolean; archived: boolean }[]): void {
-    const now = new Date().toISOString();
-    const stmt = this.db.query(
-      "INSERT OR REPLACE INTO lm_categories (id, name, is_income, archived, fetched_at) VALUES (?, ?, ?, ?, ?)"
-    );
-    for (const c of categories) {
-      stmt.run(c.id, c.name, c.isIncome ? 1 : 0, c.archived ? 1 : 0, now);
-    }
+    this.db.transaction(() => {
+      const now = new Date().toISOString();
+      const stmt = this.db.query(
+        "INSERT OR REPLACE INTO lm_categories (id, name, is_income, archived, fetched_at) VALUES (?, ?, ?, ?, ?)"
+      );
+      for (const c of categories) {
+        stmt.run(c.id, c.name, c.isIncome ? 1 : 0, c.archived ? 1 : 0, now);
+      }
+    })();
   }
 
   getCategories(): CategoryRow[] {
@@ -297,13 +305,15 @@ export class BlueplateDatabase {
   // --- LM Assets ---
 
   upsertAssets(assets: { id: number; name: string; displayName?: string; currency: string }[]): void {
-    const now = new Date().toISOString();
-    const stmt = this.db.query(
-      "INSERT OR REPLACE INTO lm_assets (id, name, display_name, currency, fetched_at) VALUES (?, ?, ?, ?, ?)"
-    );
-    for (const a of assets) {
-      stmt.run(a.id, a.name, a.displayName ?? null, a.currency, now);
-    }
+    this.db.transaction(() => {
+      const now = new Date().toISOString();
+      const stmt = this.db.query(
+        "INSERT OR REPLACE INTO lm_assets (id, name, display_name, currency, fetched_at) VALUES (?, ?, ?, ?, ?)"
+      );
+      for (const a of assets) {
+        stmt.run(a.id, a.name, a.displayName ?? null, a.currency, now);
+      }
+    })();
   }
 
   getAssets(): AssetRow[] {
@@ -322,19 +332,28 @@ export class BlueplateDatabase {
   // --- LM Tags ---
 
   upsertTags(tags: { id: number; name: string }[]): void {
-    const now = new Date().toISOString();
-    const stmt = this.db.query(
-      "INSERT OR REPLACE INTO lm_tags (id, name, fetched_at) VALUES (?, ?, ?)"
-    );
-    for (const t of tags) {
-      stmt.run(t.id, t.name, now);
-    }
+    this.db.transaction(() => {
+      const now = new Date().toISOString();
+      const stmt = this.db.query(
+        "INSERT OR REPLACE INTO lm_tags (id, name, fetched_at) VALUES (?, ?, ?)"
+      );
+      for (const t of tags) {
+        stmt.run(t.id, t.name, now);
+      }
+    })();
   }
 
   getTags(): TagRow[] {
     return this.db
       .query<TagRow, []>("SELECT * FROM lm_tags ORDER BY name")
       .all();
+  }
+
+  getTagsFetchedAt(): string | null {
+    const row = this.db
+      .query<{ fetched_at: string }, []>("SELECT fetched_at FROM lm_tags ORDER BY fetched_at DESC LIMIT 1")
+      .get();
+    return row?.fetched_at ?? null;
   }
 
   // --- FX Rates ---

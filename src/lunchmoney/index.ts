@@ -82,9 +82,12 @@ export class LunchMoneyService {
 
   async getTags(forceRefresh = false): Promise<CachedTag[]> {
     if (!forceRefresh) {
-      const rows = this.db.getTags();
-      if (rows.length > 0) {
-        return rows.map((r) => ({ id: r.id, name: r.name }));
+      const fetchedAt = this.db.getTagsFetchedAt();
+      if (fetchedAt && Date.now() - new Date(fetchedAt).getTime() < this.metadataCacheTtlMs) {
+        const rows = this.db.getTags();
+        if (rows.length > 0) {
+          return rows.map((r) => ({ id: r.id, name: r.name }));
+        }
       }
     }
 

@@ -1,4 +1,5 @@
 import type { CachedTag } from "./types.js";
+import { stripEmoji } from "./utils.js";
 
 // Category name (emoji-stripped, lowercased) → tag names to auto-apply
 const CATEGORY_TAG_RULES: Record<string, string[]> = {
@@ -21,12 +22,6 @@ const CATEGORY_TAG_RULES: Record<string, string[]> = {
   "gas": ["transit"],
   "tools": ["recurring"],
 };
-
-function stripEmoji(s: string): string {
-  return s
-    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F\u200D]/gu, "")
-    .trim();
-}
 
 export function inferTagNames(categoryName?: string): string[] {
   if (!categoryName) return [];

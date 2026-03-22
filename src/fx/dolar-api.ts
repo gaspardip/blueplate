@@ -4,7 +4,7 @@ import type { FXQuote } from "./types.js";
 
 const DOLAR_API_BASE = "https://dolarapi.com/v1";
 
-interface DolarApiResponse {
+export interface DolarApiResponse {
   moneda: string;
   casa: string;
   nombre: string;
@@ -13,25 +13,30 @@ interface DolarApiResponse {
   fechaActualizacion: string;
 }
 
+export async function fetchBlueRateRaw(): Promise<DolarApiResponse> {
+  const resp = await fetch(`${DOLAR_API_BASE}/dolares/blue`);
+  if (!resp.ok) {
+    throw new FXError(`DolarAPI returned ${resp.status}: ${resp.statusText}`);
+  }
+
+  const data = (await resp.json()) as DolarApiResponse;
+
+  if (!data.compra || data.compra <= 0) {
+    throw new FXError("DolarAPI returned invalid compra rate");
+  }
+
+  logger.debug("DolarAPI blue rate fetched", {
+    compra: data.compra,
+    venta: data.venta,
+    updated: data.fechaActualizacion,
+  });
+
+  return data;
+}
+
 export async function fetchBlueRate(): Promise<FXQuote> {
   try {
-    const resp = await fetch(`${DOLAR_API_BASE}/dolares/blue`);
-    if (!resp.ok) {
-      throw new FXError(`DolarAPI returned ${resp.status}: ${resp.statusText}`);
-    }
-
-    const data = (await resp.json()) as DolarApiResponse;
-
-    if (!data.compra || data.compra <= 0) {
-      throw new FXError("DolarAPI returned invalid compra rate");
-    }
-
-    logger.debug("DolarAPI blue rate fetched", {
-      compra: data.compra,
-      venta: data.venta,
-      updated: data.fechaActualizacion,
-    });
-
+    const data = await fetchBlueRateRaw();
     return {
       pair: "ARS/USD",
       rate: data.compra,
