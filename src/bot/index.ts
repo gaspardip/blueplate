@@ -444,6 +444,11 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     { command: "fx", description: "Current blue dollar rate" },
   ]);
 
+  // Notify allowed chats that the bot is online
+  for (const chatId of config.allowedChatIds) {
+    bot.api.sendMessage(chatId, "Bot online.").catch(() => {});
+  }
+
   if (config.mode === "webhook" && config.webhookUrl) {
     logger.info("Starting bot in webhook mode", { url: config.webhookUrl });
     await bot.api.setWebhook(config.webhookUrl, {
