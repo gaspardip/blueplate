@@ -31,7 +31,10 @@ const SYSTEM_PROMPT = `You extract transactions from Argentine bank/credit card 
 Rules:
 - Output JSON: { "close_date": "YYYY-MM-DD", "transactions": [{ "date": "YYYY-MM-DD", "payee": "...", "amount": ..., "currency": "ARS" }, ...] }
 - close_date: the statement close date (fecha de cierre). Look for "Fecha de Cierre", "Cierre", or the end date of the billing period. null if not found.
-- Dates: convert DD/MM/YYYY or DD/MM/YY to YYYY-MM-DD. Infer the year from context if not explicit.
+- Dates: Argentine CC statements group transactions by month. The year and month (e.g. "Enero 2025", "26 Enero") appear ONLY on the first line of each group. Subsequent lines in that group only show the day number. You MUST carry forward the year and month to all lines in the group until a new month/year header appears.
+  - Convert to YYYY-MM-DD format.
+  - Look for the billing period dates (e.g. "Periodo: 01/01/2025 al 31/01/2025") to determine the correct year if not explicit in transaction rows.
+  - Do NOT default to 2023 or any arbitrary year — use the year from the statement header/period.
 - Payee: clean up and normalize names into human-readable form:
   - For "PLATFORM*MERCHANT" patterns: use the MERCHANT as the payee, not the platform.
     MERPAGO*BIDCOM → "Bidcom", RAPPI*BURGER KING → "Burger King", PEDIDOSYA*MCDONALDS → "McDonald's"
@@ -49,7 +52,9 @@ Rules:
   - If a charge appears in a USD or international section of the statement, set currency to "USD"
   - If the amount uses US format (e.g. 7.99, 149.99 — no thousands separator, dot decimal) and the statement indicates it's a foreign/international charge, set currency to "USD"
   - Default to "ARS" for regular charges in Argentine format (e.g. 22.091,42)
-- Do NOT invent transactions. Only extract what is explicitly listed.`;
+- Do NOT invent transactions. Only extract what is explicitly listed.
+- Do NOT skip real transactions. If a line has a date, description, and amount, it is a transaction. Extract ALL of them.
+- The statement may have two amount columns: $ (ARS) and U$D (USD). A transaction has an amount in one column or the other, not both. Check which column the amount is in to determine the currency.`;
 
 export async function structureStatement(
   text: string,
