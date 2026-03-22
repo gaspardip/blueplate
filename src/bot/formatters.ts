@@ -272,7 +272,7 @@ export function buildImportKeyboard(
 
   if (selectedAccountId != null) {
     const account = accounts.find((a) => a.id === selectedAccountId);
-    kb.text(`Confirm → ${account?.name ?? "Account"}`, `imp_confirm:${importKey}`);
+    kb.text(`Confirm → ${account?.name ?? "Account"}`, `imp_confirm:${importKey}:${selectedAccountId}`);
     kb.text("Cancel", `imp_cancel:${importKey}`);
     return kb;
   }

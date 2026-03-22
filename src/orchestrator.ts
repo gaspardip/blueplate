@@ -48,6 +48,14 @@ export interface UndoResult {
   currency: string;
 }
 
+interface PreparedTx {
+  stx: StatementTransaction;
+  globalIndex: number;
+  externalId: string;
+  fxResult: FXResult;
+  normalizedPayee: string;
+}
+
 interface FXResult {
   amount: number;
   currency: string;
@@ -470,23 +478,19 @@ export class Orchestrator {
     const fallbackFx = await this.resolveImportFxRate();
 
     // Pre-compute FX results and filter out duplicates (same amount + date already logged manually)
-    interface PreparedTx {
-      stx: StatementTransaction;
-      globalIndex: number;
-      externalId: string;
-      fxResult: FXResult;
-      normalizedPayee: string;
-    }
     const prepared: PreparedTx[] = [];
     let skipped = 0;
 
-    // Build a set of existing (amount, date) pairs for fast lookup
+    // Build a set of existing (amount, date) pairs for fast lookup — single range query
     const existingByDate = new Map<string, Set<number>>();
-    const allDates = [...new Set(transactions.map((t) => t.date))];
-    for (const date of allDates) {
-      const rows = this.db.getTransactionsForDate(chatId, date);
-      const amounts = new Set(rows.map((r) => r.amount));
-      existingByDate.set(date, amounts);
+    const sortedDates = transactions.map((t) => t.date).sort();
+    const minDate = sortedDates[0];
+    const maxDate = sortedDates[sortedDates.length - 1];
+    const existingRows = this.db.getTransactionsForDateRange(chatId, minDate, maxDate);
+    for (const row of existingRows) {
+      const amounts = existingByDate.get(row.date) ?? new Set<number>();
+      amounts.add(row.amount);
+      existingByDate.set(row.date, amounts);
     }
 
     for (let i = 0; i < transactions.length; i++) {

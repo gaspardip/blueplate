@@ -160,27 +160,20 @@ export function createBot(
       return;
     }
 
-    // Import: confirm
+    // Import: confirm — callback data: imp_confirm:{importKey}:{assetId}
     if (data.startsWith("imp_confirm:")) {
-      const importKey = data.slice(12);
+      const rest = data.slice(12);
+      const lastColon = rest.lastIndexOf(":");
+      const importKey = rest.slice(0, lastColon);
+      const assetId = Number(rest.slice(lastColon + 1));
       const pending = pendingImports.get(importKey);
       if (!pending) {
         await ctx.answerCallbackQuery("Import expired. Send the PDF again.");
         return;
       }
 
-      // Find selected account from the keyboard
-      const keyboard = ctx.callbackQuery.message && "reply_markup" in ctx.callbackQuery.message
-        ? ctx.callbackQuery.message.reply_markup : undefined;
-      const confirmButton = keyboard?.inline_keyboard?.flat().find((b) =>
-        "callback_data" in b && b.callback_data?.startsWith("imp_confirm:")
-      );
-      const accountName = confirmButton && "text" in confirmButton
-        ? confirmButton.text.replace(/^Confirm → /, "") : "Unknown";
-
-      // Find assetId from the account picker state — it was in the imp_acct callback
       const accounts = await lm.getAccounts();
-      const account = accounts.find((a) => a.name === accountName);
+      const account = accounts.find((a) => a.id === assetId);
       if (!account) {
         await ctx.answerCallbackQuery("Account not found.");
         return;
@@ -446,7 +439,7 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
 
   // Notify allowed chats that the bot is online
   for (const chatId of config.allowedChatIds) {
-    bot.api.sendMessage(chatId, "Bot online.").catch(() => {});
+    bot.api.sendMessage(chatId, "Bot online.").catch((e) => logger.warn("Startup message failed", { chatId, error: String(e) }));
   }
 
   if (config.mode === "webhook" && config.webhookUrl) {
