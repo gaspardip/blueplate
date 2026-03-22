@@ -33,16 +33,22 @@ Rules:
 - close_date: the statement close date (fecha de cierre). Look for "Fecha de Cierre", "Cierre", or the end date of the billing period. null if not found.
 - Dates: convert DD/MM/YYYY or DD/MM/YY to YYYY-MM-DD. Infer the year from context if not explicit.
 - Payee: clean up and normalize names into human-readable form:
+  - For "PLATFORM*MERCHANT" patterns: use the MERCHANT as the payee, not the platform.
+    MERPAGO*BIDCOM → "Bidcom", RAPPI*BURGER KING → "Burger King", PEDIDOSYA*MCDONALDS → "McDonald's"
+    Exception: if no merchant after * (e.g. MERPAGO*TRANSFER), use the platform name: "Mercado Pago"
+  - Strip installment codes like C.08/12, C.01/03, cuota references
   - Remove trailing codes, IDs, asterisks, branch numbers (e.g. "SUC.42", "STORE 1042")
-  - Expand known abbreviations: MERPAGO/MERCADOPAGO → Mercado Pago, MP*→ Mercado Pago, STA/EST → Estacion
   - Use proper capitalization (title case), not ALL CAPS
   - Strip company suffixes like SA, SRL, SAS unless they're the recognizable name
-  - Examples: "MERPAGO*VENDEDOR" → "Mercado Pago", "PEDIDOSYA*MCDONALDS" → "McDonald's", "YPF ESTACION AV.CABILDO" → "YPF", "TELECENTRO SA" → "Telecentro"
+  - Examples: "MERPAGO*BIDCOM C.08/12" → "Bidcom", "TELECENTRO SA" → "Telecentro", "YPF ESTACION AV.CABILDO" → "YPF"
 - Amount: positive = expense/charge, negative = credit/payment/refund.
 - Argentine number format: 1.234,56 means one thousand two hundred thirty four point fifty six. Parse accordingly.
 - Skip totals, subtotals, headers, minimum payments, interest rates, and summary lines.
 - Skip lines that are clearly not individual transactions (e.g. "TOTAL", "SALDO ANTERIOR", "PAGO MINIMO").
-- If a currency is stated (USD, ARS, etc.), include it. Default to ARS if not specified.
+- Currency detection:
+  - If a charge appears in a USD or international section of the statement, set currency to "USD"
+  - If the amount uses US format (e.g. 7.99, 149.99 — no thousands separator, dot decimal) and the statement indicates it's a foreign/international charge, set currency to "USD"
+  - Default to "ARS" for regular charges in Argentine format (e.g. 22.091,42)
 - Do NOT invent transactions. Only extract what is explicitly listed.`;
 
 export async function structureStatement(

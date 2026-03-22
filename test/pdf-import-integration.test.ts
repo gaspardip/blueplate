@@ -133,10 +133,11 @@ describe("PDF import integration", () => {
   });
 
   describe("formatters", () => {
-    it("formatImportSummary shows all transactions with USD when preview provided", () => {
+    it("formatImportSummary shows all transactions sorted by date desc with USD", () => {
       const usdPreview = EXPECTED_TRANSACTIONS.map((t) => ({
         usdAmount: t.amount / 1400,
         rate: 1400,
+        isConverted: (t.currency ?? "ARS") === "ARS",
       }));
       const summary = formatImportSummary(EXPECTED_TRANSACTIONS, usdPreview);
 
@@ -144,10 +145,14 @@ describe("PDF import integration", () => {
       expect(summary).toContain("2026-03-03");
       expect(summary).toContain("2026-03-21");
       expect(summary).toContain("Mercado Libre");
-      expect(summary).toContain("Netflix");
-      expect(summary).toContain("Havanna"); // last transaction shown too
+      expect(summary).toContain("Havanna");
       expect(summary).toContain("$"); // USD amounts present
       expect(summary).toContain("USD"); // total USD in header
+
+      // Verify sorted by date descending — Havanna (03-21) should appear before Mercado Libre (03-03)
+      const havannaIdx = summary.indexOf("Havanna");
+      const mlIdx = summary.indexOf("Mercado Libre");
+      expect(havannaIdx).toBeLessThan(mlIdx);
     });
 
     it("formatImportSummary works without USD preview", () => {

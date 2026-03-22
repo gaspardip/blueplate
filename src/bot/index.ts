@@ -37,7 +37,7 @@ function receiptKeyboardId(result: ProcessResult): number | undefined {
 
 interface PendingImport {
   result: StatementResult;
-  usdPreview: Array<{ usdAmount: number; rate: number }>;
+  usdPreview: Array<{ usdAmount: number; rate: number; isConverted: boolean }>;
   createdAt: number;
 }
 

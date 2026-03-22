@@ -594,13 +594,14 @@ export class Orchestrator {
 
   async previewImport(
     transactions: StatementTransaction[],
-  ): Promise<Array<{ usdAmount: number; rate: number }>> {
+  ): Promise<Array<{ usdAmount: number; rate: number; isConverted: boolean }>> {
     const fallbackFx = await this.resolveImportFxRate();
     return transactions.map((stx) => {
       const currency = stx.currency ?? this.defaultCurrency;
       const fx = this.resolveRateForDate(stx.date) ?? fallbackFx;
       const result = this.convertAtRate(stx.amount, currency, fx);
-      return { usdAmount: result.amount, rate: result.fxRate ?? fx.rate };
+      const isConverted = currency.toUpperCase() === "ARS";
+      return { usdAmount: result.amount, rate: result.fxRate ?? fx.rate, isConverted };
     });
   }
 

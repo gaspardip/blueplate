@@ -218,30 +218,40 @@ export function formatFxRate(
 
 export function formatImportSummary(
   transactions: StatementTransaction[],
-  usdPreview?: Array<{ usdAmount: number; rate: number }>,
+  usdPreview?: Array<{ usdAmount: number; rate: number; isConverted: boolean }>,
 ): string {
+  // Sort by date descending
+  const indices = transactions.map((_, i) => i);
+  indices.sort((a, b) => transactions[b].date.localeCompare(transactions[a].date));
+
   const dates = transactions.map((t) => t.date).sort();
   const dateRange = dates[0] === dates[dates.length - 1]
     ? dates[0]
     : `${dates[0]} — ${dates[dates.length - 1]}`;
 
-  const arsTotal = transactions.reduce((s, t) => s + Math.abs(t.amount), 0);
-  const currency = transactions[0]?.currency ?? "ARS";
-
-  const lines = transactions.map((t, i) => {
+  const lines = indices.map((i) => {
+    const t = transactions[i];
     const usd = usdPreview?.[i];
-    const arsStr = formatNumber(Math.abs(t.amount));
     if (usd) {
-      return `  ${t.date.slice(5)} ${t.payee} — ${arsStr} ($${Math.abs(usd.usdAmount).toFixed(2)})`;
+      if (usd.isConverted) {
+        // ARS charge: show ARS amount + USD conversion
+        return `  ${t.date.slice(5)} ${t.payee} — ${formatNumber(Math.abs(t.amount))} ($${Math.abs(usd.usdAmount).toFixed(2)})`;
+      }
+      // USD charge: just show USD amount
+      return `  ${t.date.slice(5)} ${t.payee} — $${Math.abs(usd.usdAmount).toFixed(2)} USD`;
     }
-    return `  ${t.date.slice(5)} ${t.payee} — ${arsStr}`;
+    return `  ${t.date.slice(5)} ${t.payee} — ${formatNumber(Math.abs(t.amount))}`;
   });
 
-  const header = [`PDF Import: ${transactions.length} transactions`, `${dateRange} | ${currency} ${formatNumber(arsTotal)}`];
+  const header = [`PDF Import: ${transactions.length} transactions`];
 
   if (usdPreview) {
     const usdTotal = usdPreview.reduce((s, u) => s + Math.abs(u.usdAmount), 0);
-    header[1] += ` ($${usdTotal.toFixed(2)} USD)`;
+    header.push(`${dateRange} | $${usdTotal.toFixed(2)} USD`);
+  } else {
+    const arsTotal = transactions.reduce((s, t) => s + Math.abs(t.amount), 0);
+    const currency = transactions[0]?.currency ?? "ARS";
+    header.push(`${dateRange} | ${currency} ${formatNumber(arsTotal)}`);
   }
 
   return [...header, "", ...lines].join("\n");
