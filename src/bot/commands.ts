@@ -199,6 +199,80 @@ export function createCommandHandlers(
       }
     },
 
+    sync: async (ctx: Context) => {
+      const chatId = ctx.chat!.id;
+      await ctx.replyWithChatAction("typing");
+
+      const args = (ctx.message?.text ?? "").replace(/^\/sync\s*/, "").trim().toLowerCase();
+
+      // Determine date range
+      let startDate: string;
+      let endDate: string;
+      if (args === "all") {
+        startDate = "2020-01-01";
+        endDate = todayStr();
+      } else {
+        // Default: current month (1st to today)
+        startDate = `${yearMonthStr()}-01`;
+        endDate = todayStr();
+      }
+
+      // Fetch from LM
+      const lmResp = await lm.rawClient.getTransactions(startDate, endDate);
+
+      // Resolve category/account IDs to names
+      const categories = await lm.getCategories(true);
+      const accounts = await lm.getAccounts(true);
+      const catMap = new Map(categories.map((c) => [c.id, c.name]));
+      const acctMap = new Map(accounts.map((a) => [a.id, a.name]));
+
+      let matched = 0;
+      let catUpdates = 0;
+      let acctUpdates = 0;
+      let payeeUpdates = 0;
+      let deleted = 0;
+
+      for (const lmTx of lmResp.transactions) {
+        if (!lmTx.external_id?.startsWith("bp_")) continue;
+        const local = db.getByExternalId(lmTx.external_id);
+        if (!local) continue;
+        matched++;
+
+        // Handle deleted in LM
+        if (lmTx.status === "delete_pending" && !local.undone) {
+          db.markUndone(local.id);
+          deleted++;
+          continue;
+        }
+        if (local.undone) continue;
+
+        const newCat = lmTx.category_id ? catMap.get(lmTx.category_id) ?? null : null;
+        const newAcct = lmTx.manual_account_id ? acctMap.get(lmTx.manual_account_id) ?? null : null;
+        const newPayee = lmTx.payee;
+
+        const updates: { categoryName?: string; assetName?: string; payee?: string } = {};
+        if (newCat && newCat !== local.category_name) { updates.categoryName = newCat; catUpdates++; }
+        if (newAcct && newAcct !== local.asset_name) { updates.assetName = newAcct; acctUpdates++; }
+        if (newPayee && newPayee !== local.payee) { updates.payee = newPayee; payeeUpdates++; }
+
+        if (Object.keys(updates).length > 0) {
+          db.updateTransactionFields(local.id, updates);
+        }
+      }
+
+      const total = catUpdates + acctUpdates + payeeUpdates + deleted;
+      if (total === 0) {
+        await ctx.reply(`Synced ${matched} transactions. Everything up to date.`);
+      } else {
+        const parts = [];
+        if (catUpdates > 0) parts.push(`${catUpdates} categories`);
+        if (acctUpdates > 0) parts.push(`${acctUpdates} accounts`);
+        if (payeeUpdates > 0) parts.push(`${payeeUpdates} payees`);
+        if (deleted > 0) parts.push(`${deleted} deleted`);
+        await ctx.reply(`Synced ${matched} transactions. Updated: ${parts.join(", ")}.`);
+      }
+    },
+
     alias: async (ctx: Context) => {
       const text = ctx.message?.text ?? "";
       const parts = text.replace(/^\/alias\s*/, "").trim().split(/\s+/);
