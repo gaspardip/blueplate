@@ -227,6 +227,7 @@ export function createCommandHandlers(
       const acctMap = new Map(accounts.map((a) => [a.id, a.name]));
 
       let matched = 0;
+      let amountUpdates = 0;
       let catUpdates = 0;
       let acctUpdates = 0;
       let payeeUpdates = 0;
@@ -246,11 +247,13 @@ export function createCommandHandlers(
         }
         if (local.undone) continue;
 
+        const newAmount = Number(lmTx.amount);
         const newCat = lmTx.category_id ? catMap.get(lmTx.category_id) ?? null : null;
         const newAcct = lmTx.manual_account_id ? acctMap.get(lmTx.manual_account_id) ?? null : null;
         const newPayee = lmTx.payee;
 
-        const updates: { categoryName?: string; assetName?: string; payee?: string } = {};
+        const updates: { amount?: number; categoryName?: string; assetName?: string; payee?: string } = {};
+        if (!isNaN(newAmount) && Math.abs(newAmount - local.amount) > 0.005) { updates.amount = newAmount; amountUpdates++; }
         if (newCat && newCat !== local.category_name) { updates.categoryName = newCat; catUpdates++; }
         if (newAcct && newAcct !== local.asset_name) { updates.assetName = newAcct; acctUpdates++; }
         if (newPayee && newPayee !== local.payee) { updates.payee = newPayee; payeeUpdates++; }
@@ -260,11 +263,12 @@ export function createCommandHandlers(
         }
       }
 
-      const total = catUpdates + acctUpdates + payeeUpdates + deleted;
+      const total = amountUpdates + catUpdates + acctUpdates + payeeUpdates + deleted;
       if (total === 0) {
         await ctx.reply(`Synced ${matched} transactions. Everything up to date.`);
       } else {
         const parts = [];
+        if (amountUpdates > 0) parts.push(`${amountUpdates} amounts`);
         if (catUpdates > 0) parts.push(`${catUpdates} categories`);
         if (acctUpdates > 0) parts.push(`${acctUpdates} accounts`);
         if (payeeUpdates > 0) parts.push(`${payeeUpdates} payees`);
