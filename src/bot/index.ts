@@ -18,6 +18,8 @@ import {
 import { authGuard, errorBoundary, requestLogger } from "./middleware.js";
 import { transcribe } from "../transcription.js";
 import { extractPdfText, structureStatement } from "../pdf/index.js";
+import { isQuestion, askQuestion } from "./question.js";
+import { yearMonthStr } from "../utils.js";
 import type { StatementResult } from "../pdf/index.js";
 import type { ProcessResult } from "../orchestrator.js";
 
@@ -98,6 +100,7 @@ export function createBot(
   bot.command("alias", commands.alias);
   bot.command("fx", commands.fx);
   bot.command("rate", commands.fx);
+  bot.command("top", commands.top);
   bot.command("search", commands.search);
   bot.command("template", commands.template);
   bot.command("t", commands.t);
@@ -399,6 +402,29 @@ export function createBot(
       }
     }
 
+    // Question detection — route to LLM Q&A
+    if (isQuestion(text)) {
+      if (!config.openaiApiKey) {
+        await ctx.reply("Questions require OpenAI API key. Try /top for quick summaries.");
+        return;
+      }
+      await ctx.replyWithChatAction("typing");
+      try {
+        const ym = yearMonthStr();
+        const rows = db.getTransactionsForMonth(chatId, ym);
+        const answer = await askQuestion(text, rows, config.openaiApiKey);
+        await ctx.reply(answer);
+      } catch (error) {
+        if (error instanceof BlueplateError) {
+          await ctx.reply(error.message);
+        } else {
+          logger.error("Question failed", { error: String(error) });
+          await ctx.reply("Couldn't answer that. Try again.");
+        }
+      }
+      return;
+    }
+
     // Normal expense processing
     try {
       const result = await orchestrator.process(text, chatId, messageId);
@@ -433,6 +459,7 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     { command: "categories", description: "List categories" },
     { command: "accounts", description: "List accounts" },
     { command: "alias", description: "Set payee alias: /alias starbux Starbucks" },
+    { command: "top", description: "Top expenses: /top, /top week, /top category, /top payee" },
     { command: "search", description: "Search transactions: /search pizza" },
     { command: "template", description: "Manage templates: /template add|list|delete" },
     { command: "t", description: "Apply template: /t netflix" },

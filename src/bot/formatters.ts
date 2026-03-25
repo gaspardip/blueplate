@@ -287,6 +287,70 @@ export function buildImportKeyboard(
   return kb;
 }
 
+export function formatTopExpenses(rows: TransactionRow[], period: string, limit = 5): string {
+  if (rows.length === 0) return `No transactions for ${period}.`;
+
+  const sorted = [...rows].sort((a, b) => b.amount - a.amount);
+  const top = sorted.slice(0, limit);
+
+  const lines = top.map((r, i) => {
+    const cat = r.category_name ? ` (${r.category_name})` : "";
+    return `  ${i + 1}. ${capitalize(r.payee)} — $${r.amount.toFixed(2)}${cat}`;
+  });
+
+  return [`Top ${Math.min(limit, rows.length)} expenses (${period}):`, ...lines].join("\n");
+}
+
+export function formatCategoryBreakdown(rows: TransactionRow[], yearMonth: string): string {
+  if (rows.length === 0) return `No transactions for ${yearMonth}.`;
+
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  const byCategory = new Map<string, { sum: number; count: number }>();
+
+  for (const r of rows) {
+    const cat = r.category_name ?? "Uncategorized";
+    const entry = byCategory.get(cat) ?? { sum: 0, count: 0 };
+    entry.sum += r.amount;
+    entry.count++;
+    byCategory.set(cat, entry);
+  }
+
+  const sorted = [...byCategory.entries()].sort((a, b) => b[1].sum - a[1].sum);
+  const lines = sorted.map(([cat, { sum, count }]) => {
+    const pct = total > 0 ? Math.round((sum / total) * 100) : 0;
+    return `  ${cat}: $${sum.toFixed(2)} (${pct}%) — ${count} tx`;
+  });
+
+  return [
+    `${yearMonth} by category (${rows.length} tx, $${total.toFixed(2)} total):`,
+    ...lines,
+  ].join("\n");
+}
+
+export function formatPayeeBreakdown(rows: TransactionRow[], yearMonth: string, limit = 10): string {
+  if (rows.length === 0) return `No transactions for ${yearMonth}.`;
+
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  const byPayee = new Map<string, { sum: number; count: number }>();
+
+  for (const r of rows) {
+    const entry = byPayee.get(r.payee) ?? { sum: 0, count: 0 };
+    entry.sum += r.amount;
+    entry.count++;
+    byPayee.set(r.payee, entry);
+  }
+
+  const sorted = [...byPayee.entries()].sort((a, b) => b[1].sum - a[1].sum).slice(0, limit);
+  const lines = sorted.map(([payee, { sum, count }]) =>
+    `  ${capitalize(payee)}: $${sum.toFixed(2)} (${count} tx)`,
+  );
+
+  return [
+    `${yearMonth} top payees (${rows.length} tx, $${total.toFixed(2)} total):`,
+    ...lines,
+  ].join("\n");
+}
+
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }

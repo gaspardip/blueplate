@@ -3,7 +3,7 @@ import type { Orchestrator } from "../orchestrator.js";
 import type { LunchMoneyService } from "../lunchmoney/index.js";
 import { fetchBlueRateRaw } from "../fx/dolar-api.js";
 import { PayeeNormalizer } from "../payee.js";
-import { todayStr, yearMonthStr } from "../utils.js";
+import { todayStr, yearMonthStr, weekRangeStr } from "../utils.js";
 import type { BlueplateDatabase } from "../storage/database.js";
 import {
   formatAssets,
@@ -15,6 +15,9 @@ import {
   formatSearchResults,
   formatTemplateList,
   formatUndone,
+  formatTopExpenses,
+  formatCategoryBreakdown,
+  formatPayeeBreakdown,
 } from "./formatters.js";
 
 export function createCommandHandlers(
@@ -171,6 +174,29 @@ export function createCommandHandlers(
       const data = await fetchBlueRateRaw();
       const history = db.getRecentFxRates("ARS/USD", 5);
       await ctx.reply(formatFxRate(data, history));
+    },
+
+    top: async (ctx: Context) => {
+      const chatId = ctx.chat!.id;
+      const args = (ctx.message?.text ?? "").replace(/^\/top\s*/, "").trim().toLowerCase();
+
+      if (args === "week" || args === "semana") {
+        const { weekStart, weekEnd } = weekRangeStr();
+        const rows = db.getTransactionsForDateRange(chatId, weekStart, weekEnd);
+        await ctx.reply(formatTopExpenses(rows, `${weekStart} – ${weekEnd}`));
+      } else if (args === "category" || args === "cat" || args === "categoria") {
+        const ym = yearMonthStr();
+        const rows = db.getTransactionsForMonth(chatId, ym);
+        await ctx.reply(formatCategoryBreakdown(rows, ym));
+      } else if (args === "payee" || args === "comercio") {
+        const ym = yearMonthStr();
+        const rows = db.getTransactionsForMonth(chatId, ym);
+        await ctx.reply(formatPayeeBreakdown(rows, ym));
+      } else {
+        const ym = yearMonthStr();
+        const rows = db.getTransactionsForMonth(chatId, ym);
+        await ctx.reply(formatTopExpenses(rows, ym));
+      }
     },
 
     alias: async (ctx: Context) => {
