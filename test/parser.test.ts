@@ -217,6 +217,56 @@ describe("parser", () => {
       if (!result.ok) return;
       expect(result.expense.amount).toBe(500_000);
     });
+
+    it("handles multiple dots as thousand separators: 1.234.567", () => {
+      const result = parse("auto 1.234.567", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(1234567);
+    });
+
+    it("handles multiple commas as thousand separators: 1,234,567", () => {
+      const result = parse("auto 1,234,567", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(1234567);
+    });
+
+    it("handles mixed dot-comma format: 1,234.56 (US-style)", () => {
+      const result = parse("uber 1,234.56", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(1234.56);
+    });
+
+    it("handles mixed comma-dot format: 1.234,56 (Argentine-style)", () => {
+      const result = parse("supermercado 1.234,56", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(1234.56);
+    });
+
+    it("handles comma decimal: 12,50", () => {
+      const result = parse("cafe 12,50", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(12.50);
+    });
+
+    it("handles trailing period stripped from text tokens", () => {
+      const result = parse("desayuno. 5000", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.payee).toBe("desayuno");
+    });
+
+    it("handles trailing comma stripped from voice transcription", () => {
+      const result = parse("café, 14500,", emptyCtx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.expense.amount).toBe(14500);
+      expect(result.expense.payee).toBe("café");
+    });
   });
 
   describe("modifiers", () => {

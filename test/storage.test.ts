@@ -379,4 +379,124 @@ describe("BlueplateDatabase", () => {
       expect(rate).toBeNull();
     });
   });
+
+  describe("getTagsFetchedAt", () => {
+    it("returns null when no tags", () => {
+      expect(db.getTagsFetchedAt()).toBeNull();
+    });
+
+    it("returns fetched_at after upsert", () => {
+      db.upsertTags([{ id: 1, name: "recurring" }]);
+      const result = db.getTagsFetchedAt();
+      expect(result).not.toBeNull();
+      expect(result!.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("getExistingFxDates", () => {
+    it("returns empty set when no rates", () => {
+      const dates = db.getExistingFxDates("ARS/USD");
+      expect(dates.size).toBe(0);
+    });
+
+    it("returns distinct dates from source_timestamp", () => {
+      db.saveFxRate("ARS/USD", 1380, "test", "2026-03-20T18:00:00.000Z");
+      db.saveFxRate("ARS/USD", 1400, "test", "2026-03-21T18:00:00.000Z");
+      db.saveFxRate("ARS/USD", 1390, "test2", "2026-03-20T12:00:00.000Z"); // same date, different source
+
+      const dates = db.getExistingFxDates("ARS/USD");
+      expect(dates.size).toBe(2);
+      expect(dates.has("2026-03-20")).toBe(true);
+      expect(dates.has("2026-03-21")).toBe(true);
+    });
+
+    it("filters by pair", () => {
+      db.saveFxRate("ARS/USD", 1380, "test", "2026-03-20T18:00:00.000Z");
+      db.saveFxRate("EUR/USD", 1.10, "test", "2026-03-20T18:00:00.000Z");
+
+      const arsDates = db.getExistingFxDates("ARS/USD");
+      const eurDates = db.getExistingFxDates("EUR/USD");
+      expect(arsDates.size).toBe(1);
+      expect(eurDates.size).toBe(1);
+    });
+  });
+
+  describe("getRateNearDate", () => {
+    it("returns null when no rates exist", () => {
+      expect(db.getRateNearDate("ARS/USD", "2026-03-20")).toBeNull();
+    });
+
+    it("returns exact date match", () => {
+      db.saveFxRate("ARS/USD", 1380, "test", "2026-03-20T18:00:00.000Z");
+      const rate = db.getRateNearDate("ARS/USD", "2026-03-20");
+      expect(rate).not.toBeNull();
+      expect(rate!.rate).toBe(1380);
+    });
+
+    it("returns closest rate when no exact match", () => {
+      db.saveFxRate("ARS/USD", 1350, "test", "2026-03-18T18:00:00.000Z");
+      db.saveFxRate("ARS/USD", 1400, "test", "2026-03-22T18:00:00.000Z");
+
+      const rate = db.getRateNearDate("ARS/USD", "2026-03-20");
+      expect(rate).not.toBeNull();
+      // 2026-03-20T23:59:59Z is closer to 2026-03-22 (2 days) than 2026-03-18 (2.25 days)
+      expect(rate!.rate).toBe(1400);
+    });
+
+    it("prefers before rate when equidistant", () => {
+      db.saveFxRate("ARS/USD", 1350, "test", "2026-03-19T23:59:59.000Z");
+      db.saveFxRate("ARS/USD", 1400, "test", "2026-03-22T00:00:00.000Z");
+
+      const rate = db.getRateNearDate("ARS/USD", "2026-03-20");
+      expect(rate).not.toBeNull();
+    });
+
+    it("returns only rate when just one exists (before)", () => {
+      db.saveFxRate("ARS/USD", 1380, "test", "2026-03-15T18:00:00.000Z");
+      const rate = db.getRateNearDate("ARS/USD", "2026-03-20");
+      expect(rate).not.toBeNull();
+      expect(rate!.rate).toBe(1380);
+    });
+
+    it("returns only rate when just one exists (after)", () => {
+      db.saveFxRate("ARS/USD", 1400, "test", "2026-03-25T18:00:00.000Z");
+      const rate = db.getRateNearDate("ARS/USD", "2026-03-20");
+      expect(rate).not.toBeNull();
+      expect(rate!.rate).toBe(1400);
+    });
+  });
+
+  describe("setSplitGroupId batch", () => {
+    it("sets group id for multiple records at once", () => {
+      const id1 = db.saveTransaction({
+        externalId: "bp_1_1", lmTransactionId: 100, telegramChatId: 1, telegramMessageId: 1,
+        amount: 10, currency: "USD", payee: "A", date: "2026-03-20",
+      });
+      const id2 = db.saveTransaction({
+        externalId: "bp_1_2", lmTransactionId: 101, telegramChatId: 1, telegramMessageId: 2,
+        amount: 20, currency: "USD", payee: "B", date: "2026-03-20",
+      });
+
+      db.setSplitGroupId([id1, id2], id1);
+
+      const group = db.getByGroupId(id1);
+      expect(group).toHaveLength(2);
+    });
+
+    it("handles single id (non-array)", () => {
+      const id = db.saveTransaction({
+        externalId: "bp_1_3", lmTransactionId: 102, telegramChatId: 1, telegramMessageId: 3,
+        amount: 10, currency: "USD", payee: "C", date: "2026-03-20",
+      });
+
+      db.setSplitGroupId(id, id);
+
+      const group = db.getByGroupId(id);
+      expect(group).toHaveLength(1);
+    });
+
+    it("no-ops on empty array", () => {
+      db.setSplitGroupId([], 1); // should not throw
+    });
+  });
 });
