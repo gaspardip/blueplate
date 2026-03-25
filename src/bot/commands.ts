@@ -1,10 +1,12 @@
 import type { Context } from "grammy";
 import type { Orchestrator } from "../orchestrator.js";
 import type { LunchMoneyService } from "../lunchmoney/index.js";
+import type { LMTransaction } from "../lunchmoney/types.js";
 import { fetchBlueRateRaw } from "../fx/dolar-api.js";
 import { PayeeNormalizer } from "../payee.js";
 import { todayStr, yearMonthStr, weekRangeStr } from "../utils.js";
 import type { BlueplateDatabase } from "../storage/database.js";
+import type { CachedCategory, CachedAsset } from "../types.js";
 import {
   formatAssets,
   formatCategories,
@@ -200,80 +202,36 @@ export function createCommandHandlers(
     },
 
     sync: async (ctx: Context) => {
-      const chatId = ctx.chat!.id;
       await ctx.replyWithChatAction("typing");
 
       const args = (ctx.message?.text ?? "").replace(/^\/sync\s*/, "").trim().toLowerCase();
 
-      // Determine date range
       let startDate: string;
       let endDate: string;
       if (args === "all") {
         startDate = "2020-01-01";
         endDate = todayStr();
       } else {
-        // Default: current month (1st to today)
         startDate = `${yearMonthStr()}-01`;
         endDate = todayStr();
       }
 
-      // Fetch from LM
       const lmResp = await lm.rawClient.getTransactions(startDate, endDate);
-
-      // Resolve category/account IDs to names
       const categories = await lm.getCategories(true);
       const accounts = await lm.getAccounts(true);
-      const catMap = new Map(categories.map((c) => [c.id, c.name]));
-      const acctMap = new Map(accounts.map((a) => [a.id, a.name]));
 
-      let matched = 0;
-      let amountUpdates = 0;
-      let catUpdates = 0;
-      let acctUpdates = 0;
-      let payeeUpdates = 0;
-      let deleted = 0;
+      const result = syncTransactions(lmResp.transactions, categories, accounts, db);
 
-      for (const lmTx of lmResp.transactions) {
-        if (!lmTx.external_id?.startsWith("bp_")) continue;
-        const local = db.getByExternalId(lmTx.external_id);
-        if (!local) continue;
-        matched++;
-
-        // Handle deleted in LM
-        if (lmTx.status === "delete_pending" && !local.undone) {
-          db.markUndone(local.id);
-          deleted++;
-          continue;
-        }
-        if (local.undone) continue;
-
-        const newAmount = Number(lmTx.amount);
-        const newCat = lmTx.category_id ? catMap.get(lmTx.category_id) ?? null : null;
-        const newAcct = lmTx.manual_account_id ? acctMap.get(lmTx.manual_account_id) ?? null : null;
-        const newPayee = lmTx.payee;
-
-        const updates: { amount?: number; categoryName?: string; assetName?: string; payee?: string } = {};
-        if (!isNaN(newAmount) && Math.abs(newAmount - local.amount) > 0.005) { updates.amount = newAmount; amountUpdates++; }
-        if (newCat && newCat !== local.category_name) { updates.categoryName = newCat; catUpdates++; }
-        if (newAcct && newAcct !== local.asset_name) { updates.assetName = newAcct; acctUpdates++; }
-        if (newPayee && newPayee !== local.payee) { updates.payee = newPayee; payeeUpdates++; }
-
-        if (Object.keys(updates).length > 0) {
-          db.updateTransactionFields(local.id, updates);
-        }
-      }
-
-      const total = amountUpdates + catUpdates + acctUpdates + payeeUpdates + deleted;
-      if (total === 0) {
-        await ctx.reply(`Synced ${matched} transactions. Everything up to date.`);
+      if (result.totalUpdates === 0) {
+        await ctx.reply(`Synced ${result.matched} transactions. Everything up to date.`);
       } else {
         const parts = [];
-        if (amountUpdates > 0) parts.push(`${amountUpdates} amounts`);
-        if (catUpdates > 0) parts.push(`${catUpdates} categories`);
-        if (acctUpdates > 0) parts.push(`${acctUpdates} accounts`);
-        if (payeeUpdates > 0) parts.push(`${payeeUpdates} payees`);
-        if (deleted > 0) parts.push(`${deleted} deleted`);
-        await ctx.reply(`Synced ${matched} transactions. Updated: ${parts.join(", ")}.`);
+        if (result.amounts > 0) parts.push(`${result.amounts} amounts`);
+        if (result.categories > 0) parts.push(`${result.categories} categories`);
+        if (result.accounts > 0) parts.push(`${result.accounts} accounts`);
+        if (result.payees > 0) parts.push(`${result.payees} payees`);
+        if (result.deleted > 0) parts.push(`${result.deleted} deleted`);
+        await ctx.reply(`Synced ${result.matched} transactions. Updated: ${parts.join(", ")}.`);
       }
     },
 
@@ -290,5 +248,71 @@ export function createCommandHandlers(
       normalizer.setAlias(alias, canonical);
       await ctx.reply(`Alias set: "${alias}" → "${canonical}"`);
     },
+  };
+}
+
+export interface SyncResult {
+  matched: number;
+  amounts: number;
+  categories: number;
+  accounts: number;
+  payees: number;
+  deleted: number;
+  totalUpdates: number;
+}
+
+export function syncTransactions(
+  lmTransactions: LMTransaction[],
+  categories: CachedCategory[],
+  accounts: CachedAsset[],
+  db: BlueplateDatabase,
+): SyncResult {
+  const catMap = new Map(categories.map((c) => [c.id, c.name]));
+  const acctMap = new Map(accounts.map((a) => [a.id, a.name]));
+
+  let matched = 0;
+  let amounts = 0;
+  let cats = 0;
+  let accts = 0;
+  let payees = 0;
+  let deleted = 0;
+
+  for (const lmTx of lmTransactions) {
+    if (!lmTx.external_id?.startsWith("bp_")) continue;
+    const local = db.getByExternalId(lmTx.external_id);
+    if (!local) continue;
+    matched++;
+
+    if (lmTx.status === "delete_pending" && !local.undone) {
+      db.markUndone(local.id);
+      deleted++;
+      continue;
+    }
+    if (local.undone) continue;
+
+    const newAmount = Number(lmTx.amount);
+    const newCat = lmTx.category_id ? catMap.get(lmTx.category_id) ?? null : null;
+    const newAcct = lmTx.manual_account_id ? acctMap.get(lmTx.manual_account_id) ?? null : null;
+    const newPayee = lmTx.payee;
+
+    const updates: { amount?: number; categoryName?: string; assetName?: string; payee?: string } = {};
+    if (!isNaN(newAmount) && Math.abs(newAmount - local.amount) > 0.005) { updates.amount = newAmount; amounts++; }
+    if (newCat && newCat !== local.category_name) { updates.categoryName = newCat; cats++; }
+    if (newAcct && newAcct !== local.asset_name) { updates.assetName = newAcct; accts++; }
+    if (newPayee && newPayee !== local.payee) { updates.payee = newPayee; payees++; }
+
+    if (Object.keys(updates).length > 0) {
+      db.updateTransactionFields(local.id, updates);
+    }
+  }
+
+  return {
+    matched,
+    amounts,
+    categories: cats,
+    accounts: accts,
+    payees,
+    deleted,
+    totalUpdates: amounts + cats + accts + payees + deleted,
   };
 }
