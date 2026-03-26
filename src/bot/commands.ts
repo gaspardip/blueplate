@@ -5,7 +5,7 @@ import type { LMTransaction } from "../lunchmoney/types.js";
 import { BlueplateError } from "../errors.js";
 import { fetchBlueRateRaw } from "../fx/dolar-api.js";
 import { PayeeNormalizer } from "../payee.js";
-import { todayStr, yearMonthStr, weekRangeStr } from "../utils.js";
+import { todayStr, yearMonthStr, weekRangeStr, resolveDate } from "../utils.js";
 import type { BlueplateDatabase } from "../storage/database.js";
 import type { CachedCategory, CachedAsset } from "../types.js";
 import {
@@ -256,14 +256,15 @@ export function createCommandHandlers(
       const text = ctx.message?.text ?? "";
       const args = text.replace(/^\/(?:sell|vendo)\s*/, "").trim();
 
-      const match = args.match(/^([\d.,]+)\s*@?\s*([\d.,]+)$/);
+      const match = args.match(/^([\d.,]+)\s*@?\s*([\d.,]+)(?:\s+(.+))?$/);
       if (!match) {
-        await ctx.reply("Usage: /sell <usd> @ <rate>\nExample: /sell 100 @ 1400");
+        await ctx.reply("Usage: /sell <usd> @ <rate> [date]\nExample: /sell 100 @ 1400\nExample: /sell 100 @ 1400 ayer");
         return;
       }
 
       const usdAmount = parseFloat(match[1].replace(/,/g, ""));
       const rate = parseFloat(match[2].replace(/,/g, ""));
+      const date = resolveDate(match[3]?.trim());
 
       if (isNaN(usdAmount) || usdAmount <= 0 || isNaN(rate) || rate <= 0) {
         await ctx.reply("Invalid amounts. Both must be positive numbers.");
@@ -271,7 +272,7 @@ export function createCommandHandlers(
       }
 
       try {
-        const result = await orchestrator.processFxSell(usdAmount, rate, chatId, messageId);
+        const result = await orchestrator.processFxSell(usdAmount, rate, chatId, messageId, date);
         const arsFormatted = result.arsAmount.toLocaleString("en-US", { maximumFractionDigits: 2 });
         const rateFormatted = result.rate.toLocaleString("en-US", { maximumFractionDigits: 2 });
         const { buildReceiptKeyboard } = await import("./formatters.js");

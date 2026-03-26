@@ -659,6 +659,7 @@ export class Orchestrator {
     rate: number,
     chatId: number,
     messageId: number,
+    sellDate?: string,
   ): Promise<FxSellResult> {
     const ctx = await this.getResolutionContext();
     const arsAmount = Math.round(usdAmount * rate * 100) / 100;
@@ -675,7 +676,7 @@ export class Orchestrator {
       stripEmoji(c.name).toLowerCase().includes("transfer"),
     );
 
-    const date = todayStr();
+    const date = sellDate ?? todayStr();
     const payee = "FX Sell USD→ARS";
     const usdExternalId = `bp_sell_${chatId}_${messageId}_0`;
     const arsExternalId = `bp_sell_${chatId}_${messageId}_1`;
