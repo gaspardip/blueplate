@@ -291,6 +291,66 @@ export function createCommandHandlers(
         throw error;
       }
     },
+
+    transfer: async (ctx: Context) => {
+      const chatId = ctx.chat!.id;
+      const messageId = ctx.message!.message_id;
+      const text = ctx.message?.text ?? "";
+      const args = text.replace(/^\/transfer\s*/, "").trim();
+
+      // Parse: /transfer 1000000 cash ars → banco [ayer]
+      // Separator: →, ->, to, a
+      const match = args.match(/^([\d.,kKmM]+)\s+(.+?)\s*(?:→|->|to|a)\s*(.+)$/);
+      if (!match) {
+        await ctx.reply("Usage: /transfer <amount> <from> → <to> [date]\nExample: /transfer 1000000 cash ars → banco\nExample: /transfer 500k mp → banco ayer");
+        return;
+      }
+
+      // Parse amount (reuse k/m suffix logic)
+      let amountStr = match[1].replace(/,/g, "");
+      let multiplier = 1;
+      if (/[kK]$/.test(amountStr)) { multiplier = 1000; amountStr = amountStr.slice(0, -1); }
+      else if (/[mM]$/.test(amountStr)) { multiplier = 1_000_000; amountStr = amountStr.slice(0, -1); }
+      const amount = parseFloat(amountStr) * multiplier;
+
+      if (isNaN(amount) || amount <= 0) {
+        await ctx.reply("Invalid amount.");
+        return;
+      }
+
+      const fromHint = match[2].trim();
+
+      // The "to" part may contain an optional date at the end
+      const toParts = match[3].trim();
+      const dateMatch = toParts.match(/^(.+?)\s+(ayer|anteayer|yesterday|hoy|today|\d{4}-\d{2}-\d{2})$/i);
+      let toHint: string;
+      let date: string;
+      if (dateMatch) {
+        toHint = dateMatch[1].trim();
+        date = resolveDate(dateMatch[2]);
+      } else {
+        toHint = toParts;
+        date = todayStr();
+      }
+
+      try {
+        const result = await orchestrator.processTransfer(amount, fromHint, toHint, chatId, messageId, date);
+        const amtFormatted = amount.toLocaleString("en-US", { maximumFractionDigits: 2 });
+        const { buildReceiptKeyboard } = await import("./formatters.js");
+        const keyboard = buildReceiptKeyboard(result.splitGroupId);
+        await ctx.reply(
+          `Transfer: ${result.currency} ${amtFormatted}\n` +
+          `  ${result.fromAccountName} → ${result.toAccountName}`,
+          { reply_markup: keyboard },
+        );
+      } catch (error) {
+        if (error instanceof BlueplateError) {
+          await ctx.reply(error.message);
+          return;
+        }
+        throw error;
+      }
+    },
   };
 }
 

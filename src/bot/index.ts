@@ -104,6 +104,7 @@ export function createBot(
   bot.command("sync", commands.sync);
   bot.command("sell", commands.sell);
   bot.command("vendo", commands.sell);
+  bot.command("transfer", commands.transfer);
   bot.command("search", commands.search);
   bot.command("template", commands.template);
   bot.command("t", commands.t);
@@ -465,6 +466,7 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     { command: "top", description: "Top expenses: /top, /top week, /top category, /top payee" },
     { command: "sync", description: "Sync changes from Lunch Money: /sync, /sync all" },
     { command: "sell", description: "Sell USD cash: /sell 100 @ 1400" },
+    { command: "transfer", description: "Transfer between accounts: /transfer 1M cash ars → banco" },
     { command: "search", description: "Search transactions: /search pizza" },
     { command: "template", description: "Manage templates: /template add|list|delete" },
     { command: "t", description: "Apply template: /t netflix" },

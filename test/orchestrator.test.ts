@@ -609,6 +609,135 @@ describe("Orchestrator", () => {
     });
   });
 
+  describe("processTransfer", () => {
+    function setupTransferFetch() {
+      let lmIdCounter = 6000;
+      globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+
+        if (urlStr.includes("dolarapi.com")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ moneda: "USD", casa: "blue", compra: 1380, venta: 1425, fechaActualizacion: "2026-03-26T12:00:00.000Z" }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+
+        if (urlStr.includes("/transactions") && init?.method === "POST") {
+          const body = JSON.parse(init.body as string);
+          const txs = body.transactions.map((_: unknown, i: number) => ({
+            id: lmIdCounter + i, date: "2026-03-26", payee: "Test", amount: "100", currency: "ars",
+          }));
+          lmIdCounter += txs.length;
+          return Promise.resolve(
+            new Response(JSON.stringify({ transactions: txs }), { status: 201, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/transactions/") && init?.method === "DELETE") {
+          return Promise.resolve(new Response(null, { status: 204 }));
+        }
+
+        if (urlStr.includes("/categories")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ categories: [
+              { id: 50, name: "💸 Payment, Transfer", is_income: false, archived: false, is_group: false, group_id: null },
+            ] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/manual_accounts")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ manual_accounts: [
+              { id: 20, name: "Cash USD", display_name: null, type: "cash", currency: "usd", balance: "0", to_base: 1, status: "active", exclude_from_transactions: false, created_by_name: "test", balance_as_of: "2026-03-26", created_at: "", updated_at: "" },
+              { id: 21, name: "Cash ARS", display_name: null, type: "cash", currency: "ars", balance: "0", to_base: 1, status: "active", exclude_from_transactions: false, created_by_name: "test", balance_as_of: "2026-03-26", created_at: "", updated_at: "" },
+              { id: 22, name: "Banco", display_name: null, type: "cash", currency: "ars", balance: "0", to_base: 1, status: "active", exclude_from_transactions: false, created_by_name: "test", balance_as_of: "2026-03-26", created_at: "", updated_at: "" },
+              { id: 23, name: "Mercado Pago", display_name: null, type: "cash", currency: "ars", balance: "0", to_base: 1, status: "active", exclude_from_transactions: false, created_by_name: "test", balance_as_of: "2026-03-26", created_at: "", updated_at: "" },
+            ] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/tags")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ tags: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        return Promise.resolve(new Response("Not found", { status: 404 }));
+      }) as any;
+    }
+
+    it("creates two linked transactions between accounts", async () => {
+      setupTransferFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const result = await orchestrator.processTransfer(1000000, "cash ars", "banco", 123, 950);
+
+      expect(result.amount).toBe(1000000);
+      expect(result.fromAccountName).toBe("Cash ARS");
+      expect(result.toAccountName).toBe("Banco");
+      expect(result.splitGroupId).toBeDefined();
+
+      const fromRecord = db.getByExternalId("bp_xfer_123_950_0");
+      const toRecord = db.getByExternalId("bp_xfer_123_950_1");
+      expect(fromRecord).not.toBeNull();
+      expect(toRecord).not.toBeNull();
+      expect(fromRecord!.amount).toBe(1000000);
+      expect(toRecord!.amount).toBe(-1000000);
+      expect(fromRecord!.asset_name).toBe("Cash ARS");
+      expect(toRecord!.asset_name).toBe("Banco");
+    });
+
+    it("undo deletes both legs", async () => {
+      setupTransferFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const result = await orchestrator.processTransfer(500000, "cash ars", "banco", 123, 951);
+      await orchestrator.undo(123, result.splitGroupId);
+
+      const group = db.getByGroupId(result.splitGroupId);
+      expect(group).toHaveLength(0);
+    });
+
+    it("resolves accounts by fuzzy match", async () => {
+      setupTransferFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      // "mp" should match "Mercado Pago" by initials
+      const result = await orchestrator.processTransfer(50000, "mp", "banco", 123, 952);
+      expect(result.fromAccountName).toBe("Mercado Pago");
+      expect(result.toAccountName).toBe("Banco");
+    });
+
+    it("throws when account not found", async () => {
+      setupTransferFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      expect(orchestrator.processTransfer(100, "nonexistent", "banco", 123, 953))
+        .rejects.toThrow('Account "nonexistent" not found');
+    });
+
+    it("dedup returns cached result", async () => {
+      setupTransferFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const first = await orchestrator.processTransfer(100000, "cash ars", "banco", 123, 954);
+      const second = await orchestrator.processTransfer(100000, "cash ars", "banco", 123, 954);
+      expect(second.splitGroupId).toBe(first.splitGroupId);
+    });
+  });
+
   describe("processFxSell", () => {
     function setupFxSellFetch() {
       let lmIdCounter = 7000;

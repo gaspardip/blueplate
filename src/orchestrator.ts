@@ -52,6 +52,14 @@ export interface FxSellResult {
   splitGroupId: number;
 }
 
+export interface TransferResult {
+  amount: number;
+  currency: string;
+  fromAccountName: string;
+  toAccountName: string;
+  splitGroupId: number;
+}
+
 export interface UndoResult {
   payee: string;
   amount: number;
@@ -651,6 +659,118 @@ export class Orchestrator {
       originalCurrency: "ARS",
       fxRate: fx.rate,
       fxSource: fx.source,
+    };
+  }
+
+  async processTransfer(
+    amount: number,
+    fromHint: string,
+    toHint: string,
+    chatId: number,
+    messageId: number,
+    transferDate?: string,
+  ): Promise<TransferResult> {
+    const ctx = await this.getResolutionContext();
+
+    const fromAccount = fuzzyMatchAsset(fromHint, ctx.assets);
+    const toAccount = fuzzyMatchAsset(toHint, ctx.assets);
+    if (!fromAccount) throw new BlueplateError(`Account "${fromHint}" not found.`, "NO_ACCOUNT", false);
+    if (!toAccount) throw new BlueplateError(`Account "${toHint}" not found.`, "NO_ACCOUNT", false);
+
+    const currency = fromAccount.currency.toLowerCase();
+    const date = transferDate ?? todayStr();
+    const payee = `Transfer ${fromAccount.name} → ${toAccount.name}`;
+    const fromExternalId = `bp_xfer_${chatId}_${messageId}_0`;
+    const toExternalId = `bp_xfer_${chatId}_${messageId}_1`;
+
+    // Dedup check
+    const existing = this.db.getByExternalId(fromExternalId);
+    if (existing && existing.split_group_id != null) {
+      return {
+        amount,
+        currency: fromAccount.currency,
+        fromAccountName: fromAccount.name,
+        toAccountName: toAccount.name,
+        splitGroupId: existing.split_group_id,
+      };
+    }
+
+    // Find "Payment, Transfer" category
+    const transferCat = ctx.categories.find((c) =>
+      stripEmoji(c.name).toLowerCase().includes("payment") ||
+      stripEmoji(c.name).toLowerCase().includes("transfer"),
+    );
+
+    const meta: BlueplateMetadata = {
+      blueplate_version: 1,
+      ingested_via: "telegram",
+      telegram_chat_id: chatId,
+      telegram_message_id: messageId,
+    };
+
+    const payloads: LMCreateTransactionPayload[] = [
+      {
+        date,
+        amount: amount.toFixed(2),
+        currency,
+        payee,
+        manual_account_id: fromAccount.id,
+        category_id: transferCat?.id,
+        external_id: fromExternalId,
+        status: "reviewed",
+        custom_metadata: meta as Record<string, unknown>,
+      },
+      {
+        date,
+        amount: (-amount).toFixed(2),
+        currency,
+        payee,
+        manual_account_id: toAccount.id,
+        category_id: transferCat?.id,
+        external_id: toExternalId,
+        status: "reviewed",
+        custom_metadata: meta as Record<string, unknown>,
+      },
+    ];
+
+    const lmIds = await this.lm.rawClient.createTransactions(payloads);
+
+    const fromLocalId = this.db.saveTransaction({
+      externalId: fromExternalId,
+      lmTransactionId: lmIds[0],
+      telegramChatId: chatId,
+      telegramMessageId: messageId,
+      amount,
+      currency: fromAccount.currency,
+      payee,
+      categoryName: transferCat?.name,
+      assetName: fromAccount.name,
+      date,
+    });
+
+    const toLocalId = this.db.saveTransaction({
+      externalId: toExternalId,
+      lmTransactionId: lmIds[1],
+      telegramChatId: chatId,
+      telegramMessageId: messageId,
+      amount: -amount,
+      currency: fromAccount.currency,
+      payee,
+      categoryName: transferCat?.name,
+      assetName: toAccount.name,
+      date,
+    });
+
+    this.db.setSplitGroupId([fromLocalId, toLocalId], fromLocalId);
+
+    logger.info("Transfer created", { amount, from: fromAccount.name, to: toAccount.name, groupId: fromLocalId });
+
+    return {
+      amount,
+      currency: fromAccount.currency,
+      fromAccountName: fromAccount.name,
+      toAccountName: toAccount.name,
+      splitGroupId: fromLocalId,
     };
   }
 
