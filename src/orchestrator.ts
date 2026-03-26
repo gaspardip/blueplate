@@ -664,11 +664,15 @@ export class Orchestrator {
     const ctx = await this.getResolutionContext();
     const arsAmount = Math.round(usdAmount * rate * 100) / 100;
 
-    // Find accounts by currency
-    const usdAccount = ctx.assets.find((a) => a.currency.toLowerCase() === "usd");
-    const arsAccount = ctx.assets.find((a) => a.currency.toLowerCase() === "ars");
+    // Find cash accounts — prefer "Cash USD"/"Cash ARS" by name, fall back to currency match
+    const usdAccount =
+      ctx.assets.find((a) => a.name.toLowerCase().includes("cash") && a.currency.toLowerCase() === "usd") ??
+      ctx.assets.find((a) => a.currency.toLowerCase() === "usd");
+    const arsAccount =
+      ctx.assets.find((a) => a.name.toLowerCase().includes("cash") && a.currency.toLowerCase() === "ars") ??
+      ctx.assets.find((a) => a.currency.toLowerCase() === "ars");
     if (!usdAccount) throw new BlueplateError("No USD account found.", "NO_ACCOUNT", false);
-    if (!arsAccount) throw new BlueplateError("No ARS account found.", "NO_ACCOUNT", false);
+    if (!arsAccount) throw new BlueplateError("No ARS cash account found.", "NO_ACCOUNT", false);
 
     // Find "Payment, Transfer" category
     const transferCat = ctx.categories.find((c) =>
