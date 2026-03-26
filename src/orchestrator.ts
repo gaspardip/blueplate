@@ -10,7 +10,7 @@ import { fuzzyMatchCategory, fuzzyMatchAsset } from "./parser/grammar.js";
 import type { BlueplateDatabase, TransactionRow } from "./storage/database.js";
 import type { Transaction, ResolutionContext, CachedCategory, CachedAsset } from "./types.js";
 import type { ParsedExpense } from "./parser/types.js";
-import type { LMCreateTransactionPayload, LMUpdateTransactionPayload } from "./lunchmoney/types.js";
+import type { LMCreateTransactionPayload, LMUpdateTransactionPayload, BlueplateMetadata } from "./lunchmoney/types.js";
 import { todayStr, stripEmoji } from "./utils.js";
 import type { StatementTransaction } from "./pdf/index.js";
 
@@ -683,7 +683,6 @@ export class Orchestrator {
     // Dedup check
     const existing = this.db.getByExternalId(usdExternalId);
     if (existing && existing.split_group_id != null) {
-      const group = this.db.getByGroupId(existing.split_group_id);
       return {
         usdAmount,
         arsAmount,
@@ -694,13 +693,13 @@ export class Orchestrator {
       };
     }
 
-    const meta = {
+    const meta: BlueplateMetadata = {
       blueplate_version: 1,
-      ingested_via: "telegram" as const,
+      ingested_via: "telegram",
       telegram_chat_id: chatId,
       telegram_message_id: messageId,
       fx_rate: rate,
-      fx_mode: "manual_sell" as const,
+      fx_mode: "manual_sell",
       fx_source: "user",
     };
 

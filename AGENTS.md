@@ -70,7 +70,7 @@ Import:  PDF → extract text → LLM structure → preview → confirm → per-
 
 - CalVer versioning (YYYY.M.D)
 - Structured JSON logging
-- `external_id` patterns: `bp_{chatId}_{msgId}` (manual), `bp_import_{chatId}_{msgId}_{i}` (PDF import)
+- `external_id` patterns: `bp_{chatId}_{msgId}` (manual), `bp_import_{chatId}_{msgId}_{i}` (PDF import), `bp_sell_{chatId}_{msgId}_{0|1}` (FX sell)
 - `status: "reviewed"` for manual entries, `"unreviewed"` for PDF imports
 - Metadata stored as `custom_metadata` on LM transactions (BlueplateMetadata schema)
 - All config via env vars, validated with zod at startup (`src/config.ts`)
