@@ -277,10 +277,11 @@ export function createCommandHandlers(
         const rateFormatted = result.rate.toLocaleString("en-US", { maximumFractionDigits: 2 });
         const { buildReceiptKeyboard } = await import("./formatters.js");
         const keyboard = buildReceiptKeyboard(result.splitGroupId);
+        const sellDateLine = date !== todayStr() ? `\n  Date: ${date}` : "";
         await ctx.reply(
           `Sold $${usdAmount.toFixed(2)} USD → ARS ${arsFormatted} @ ${rateFormatted}\n` +
           `  ${result.usdAccountName}: -$${usdAmount.toFixed(2)}\n` +
-          `  ${result.arsAccountName}: +ARS ${arsFormatted}`,
+          `  ${result.arsAccountName}: +ARS ${arsFormatted}${sellDateLine}`,
           { reply_markup: keyboard },
         );
       } catch (error) {
@@ -338,9 +339,10 @@ export function createCommandHandlers(
         const amtFormatted = amount.toLocaleString("en-US", { maximumFractionDigits: 2 });
         const { buildReceiptKeyboard } = await import("./formatters.js");
         const keyboard = buildReceiptKeyboard(result.splitGroupId);
+        const dateLine = date !== todayStr() ? `\n  Date: ${date}` : "";
         await ctx.reply(
           `Transfer: ${result.currency} ${amtFormatted}\n` +
-          `  ${result.fromAccountName} → ${result.toAccountName}`,
+          `  ${result.fromAccountName} → ${result.toAccountName}${dateLine}`,
           { reply_markup: keyboard },
         );
       } catch (error) {
