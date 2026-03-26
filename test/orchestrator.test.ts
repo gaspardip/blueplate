@@ -609,6 +609,141 @@ describe("Orchestrator", () => {
     });
   });
 
+  describe("processFxSell", () => {
+    function setupFxSellFetch() {
+      let lmIdCounter = 7000;
+      globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+
+        if (urlStr.includes("dolarapi.com")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ moneda: "USD", casa: "blue", compra: 1380, venta: 1425, fechaActualizacion: "2026-03-26T12:00:00.000Z" }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+
+        if (urlStr.includes("/transactions") && init?.method === "POST") {
+          const body = JSON.parse(init.body as string);
+          const txs = body.transactions.map((_: unknown, i: number) => ({
+            id: lmIdCounter + i, date: "2026-03-26", payee: "Test", amount: "100", currency: "usd",
+          }));
+          lmIdCounter += txs.length;
+          return Promise.resolve(
+            new Response(JSON.stringify({ transactions: txs }), { status: 201, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/transactions/") && init?.method === "DELETE") {
+          return Promise.resolve(new Response(null, { status: 204 }));
+        }
+
+        if (urlStr.includes("/categories")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ categories: [
+              { id: 50, name: "💸 Payment, Transfer", is_income: false, archived: false, is_group: false, group_id: null },
+            ] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/manual_accounts")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ manual_accounts: [
+              { id: 20, name: "USD Cash", display_name: null, type: "cash", currency: "usd", balance: "0", to_base: 1, status: "active", exclude_from_transactions: false, created_by_name: "test", balance_as_of: "2026-03-26", created_at: "", updated_at: "" },
+              { id: 21, name: "ARS Cash", display_name: null, type: "cash", currency: "ars", balance: "0", to_base: 1, status: "active", exclude_from_transactions: false, created_by_name: "test", balance_as_of: "2026-03-26", created_at: "", updated_at: "" },
+            ] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        if (urlStr.includes("/tags")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ tags: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }
+
+        return Promise.resolve(new Response("Not found", { status: 404 }));
+      }) as any;
+    }
+
+    it("creates two linked transactions for USD→ARS exchange", async () => {
+      setupFxSellFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const result = await orchestrator.processFxSell(100, 1400, 123, 900);
+
+      expect(result.usdAmount).toBe(100);
+      expect(result.arsAmount).toBe(140000);
+      expect(result.rate).toBe(1400);
+      expect(result.usdAccountName).toBe("USD Cash");
+      expect(result.arsAccountName).toBe("ARS Cash");
+      expect(result.splitGroupId).toBeDefined();
+
+      // Verify both records saved locally
+      const usdRecord = db.getByExternalId("bp_sell_123_900_0");
+      const arsRecord = db.getByExternalId("bp_sell_123_900_1");
+      expect(usdRecord).not.toBeNull();
+      expect(arsRecord).not.toBeNull();
+      expect(usdRecord!.amount).toBe(100);
+      expect(usdRecord!.currency).toBe("USD");
+      expect(usdRecord!.asset_name).toBe("USD Cash");
+      expect(arsRecord!.amount).toBe(-140000);
+      expect(arsRecord!.currency).toBe("ARS");
+      expect(arsRecord!.asset_name).toBe("ARS Cash");
+    });
+
+    it("links both legs with split_group_id for atomic undo", async () => {
+      setupFxSellFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const result = await orchestrator.processFxSell(50, 1350, 123, 901);
+      const group = db.getByGroupId(result.splitGroupId);
+      expect(group).toHaveLength(2);
+    });
+
+    it("undo deletes both legs", async () => {
+      setupFxSellFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const result = await orchestrator.processFxSell(100, 1400, 123, 902);
+      await orchestrator.undo(123, result.splitGroupId);
+
+      const group = db.getByGroupId(result.splitGroupId);
+      expect(group).toHaveLength(0);
+    });
+
+    it("dedup returns cached result on re-sell", async () => {
+      setupFxSellFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const first = await orchestrator.processFxSell(100, 1400, 123, 903);
+      const second = await orchestrator.processFxSell(100, 1400, 123, 903);
+
+      expect(second.splitGroupId).toBe(first.splitGroupId);
+    });
+
+    it("assigns Payment, Transfer category", async () => {
+      setupFxSellFetch();
+      db.upsertCategories([{ id: 50, name: "💸 Payment, Transfer", isIncome: false, archived: false }]);
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      await orchestrator.processFxSell(100, 1400, 123, 904);
+
+      const record = db.getByExternalId("bp_sell_123_904_0");
+      expect(record!.category_name).toBe("💸 Payment, Transfer");
+    });
+  });
+
   function setupMockFetchWithAccounts() {
     let lmIdCounter = 9000;
     globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {

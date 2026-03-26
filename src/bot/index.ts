@@ -102,6 +102,8 @@ export function createBot(
   bot.command("rate", commands.fx);
   bot.command("top", commands.top);
   bot.command("sync", commands.sync);
+  bot.command("sell", commands.sell);
+  bot.command("vendo", commands.sell);
   bot.command("search", commands.search);
   bot.command("template", commands.template);
   bot.command("t", commands.t);
@@ -462,6 +464,7 @@ export async function startBot(bot: Bot, config: Config): Promise<void> {
     { command: "alias", description: "Set payee alias: /alias starbux Starbucks" },
     { command: "top", description: "Top expenses: /top, /top week, /top category, /top payee" },
     { command: "sync", description: "Sync changes from Lunch Money: /sync, /sync all" },
+    { command: "sell", description: "Sell USD cash: /sell 100 @ 1400" },
     { command: "search", description: "Search transactions: /search pizza" },
     { command: "template", description: "Manage templates: /template add|list|delete" },
     { command: "t", description: "Apply template: /t netflix" },

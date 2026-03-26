@@ -2,6 +2,7 @@ import type { Context } from "grammy";
 import type { Orchestrator } from "../orchestrator.js";
 import type { LunchMoneyService } from "../lunchmoney/index.js";
 import type { LMTransaction } from "../lunchmoney/types.js";
+import { BlueplateError } from "../errors.js";
 import { fetchBlueRateRaw } from "../fx/dolar-api.js";
 import { PayeeNormalizer } from "../payee.js";
 import { todayStr, yearMonthStr, weekRangeStr } from "../utils.js";
@@ -247,6 +248,47 @@ export function createCommandHandlers(
       const normalizer = new PayeeNormalizer(db);
       normalizer.setAlias(alias, canonical);
       await ctx.reply(`Alias set: "${alias}" → "${canonical}"`);
+    },
+
+    sell: async (ctx: Context) => {
+      const chatId = ctx.chat!.id;
+      const messageId = ctx.message!.message_id;
+      const text = ctx.message?.text ?? "";
+      const args = text.replace(/^\/(?:sell|vendo)\s*/, "").trim();
+
+      const match = args.match(/^([\d.,]+)\s*@?\s*([\d.,]+)$/);
+      if (!match) {
+        await ctx.reply("Usage: /sell <usd> @ <rate>\nExample: /sell 100 @ 1400");
+        return;
+      }
+
+      const usdAmount = parseFloat(match[1].replace(/,/g, ""));
+      const rate = parseFloat(match[2].replace(/,/g, ""));
+
+      if (isNaN(usdAmount) || usdAmount <= 0 || isNaN(rate) || rate <= 0) {
+        await ctx.reply("Invalid amounts. Both must be positive numbers.");
+        return;
+      }
+
+      try {
+        const result = await orchestrator.processFxSell(usdAmount, rate, chatId, messageId);
+        const arsFormatted = result.arsAmount.toLocaleString("en-US", { maximumFractionDigits: 2 });
+        const rateFormatted = result.rate.toLocaleString("en-US", { maximumFractionDigits: 2 });
+        const { buildReceiptKeyboard } = await import("./formatters.js");
+        const keyboard = buildReceiptKeyboard(result.splitGroupId);
+        await ctx.reply(
+          `Sold $${usdAmount.toFixed(2)} USD → ARS ${arsFormatted} @ ${rateFormatted}\n` +
+          `  ${result.usdAccountName}: -$${usdAmount.toFixed(2)}\n` +
+          `  ${result.arsAccountName}: +ARS ${arsFormatted}`,
+          { reply_markup: keyboard },
+        );
+      } catch (error) {
+        if (error instanceof BlueplateError) {
+          await ctx.reply(error.message);
+          return;
+        }
+        throw error;
+      }
     },
   };
 }

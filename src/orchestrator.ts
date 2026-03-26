@@ -11,7 +11,7 @@ import type { BlueplateDatabase, TransactionRow } from "./storage/database.js";
 import type { Transaction, ResolutionContext, CachedCategory, CachedAsset } from "./types.js";
 import type { ParsedExpense } from "./parser/types.js";
 import type { LMCreateTransactionPayload, LMUpdateTransactionPayload } from "./lunchmoney/types.js";
-import { todayStr } from "./utils.js";
+import { todayStr, stripEmoji } from "./utils.js";
 import type { StatementTransaction } from "./pdf/index.js";
 
 export interface AccountLeg {
@@ -41,6 +41,15 @@ export interface ImportResult {
   skipped: number;
   splitGroupId: number | null;
   accountName: string;
+}
+
+export interface FxSellResult {
+  usdAmount: number;
+  arsAmount: number;
+  rate: number;
+  usdAccountName: string;
+  arsAccountName: string;
+  splitGroupId: number;
 }
 
 export interface UndoResult {
@@ -642,6 +651,127 @@ export class Orchestrator {
       originalCurrency: "ARS",
       fxRate: fx.rate,
       fxSource: fx.source,
+    };
+  }
+
+  async processFxSell(
+    usdAmount: number,
+    rate: number,
+    chatId: number,
+    messageId: number,
+  ): Promise<FxSellResult> {
+    const ctx = await this.getResolutionContext();
+    const arsAmount = Math.round(usdAmount * rate * 100) / 100;
+
+    // Find accounts by currency
+    const usdAccount = ctx.assets.find((a) => a.currency.toLowerCase() === "usd");
+    const arsAccount = ctx.assets.find((a) => a.currency.toLowerCase() === "ars");
+    if (!usdAccount) throw new BlueplateError("No USD account found.", "NO_ACCOUNT", false);
+    if (!arsAccount) throw new BlueplateError("No ARS account found.", "NO_ACCOUNT", false);
+
+    // Find "Payment, Transfer" category
+    const transferCat = ctx.categories.find((c) =>
+      stripEmoji(c.name).toLowerCase().includes("payment") ||
+      stripEmoji(c.name).toLowerCase().includes("transfer"),
+    );
+
+    const date = todayStr();
+    const payee = "FX Sell USD→ARS";
+    const usdExternalId = `bp_sell_${chatId}_${messageId}_0`;
+    const arsExternalId = `bp_sell_${chatId}_${messageId}_1`;
+
+    // Dedup check
+    const existing = this.db.getByExternalId(usdExternalId);
+    if (existing && existing.split_group_id != null) {
+      const group = this.db.getByGroupId(existing.split_group_id);
+      return {
+        usdAmount,
+        arsAmount,
+        rate,
+        usdAccountName: usdAccount.name,
+        arsAccountName: arsAccount.name,
+        splitGroupId: existing.split_group_id,
+      };
+    }
+
+    const meta = {
+      blueplate_version: 1,
+      ingested_via: "telegram" as const,
+      telegram_chat_id: chatId,
+      telegram_message_id: messageId,
+      fx_rate: rate,
+      fx_mode: "manual_sell" as const,
+      fx_source: "user",
+    };
+
+    const payloads: LMCreateTransactionPayload[] = [
+      {
+        date,
+        amount: usdAmount.toFixed(2),
+        currency: "usd",
+        payee,
+        manual_account_id: usdAccount.id,
+        category_id: transferCat?.id,
+        external_id: usdExternalId,
+        status: "reviewed",
+        custom_metadata: meta as Record<string, unknown>,
+      },
+      {
+        date,
+        amount: (-arsAmount).toFixed(2),
+        currency: "ars",
+        payee,
+        manual_account_id: arsAccount.id,
+        category_id: transferCat?.id,
+        external_id: arsExternalId,
+        status: "reviewed",
+        custom_metadata: meta as Record<string, unknown>,
+      },
+    ];
+
+    const lmIds = await this.lm.rawClient.createTransactions(payloads);
+
+    const usdLocalId = this.db.saveTransaction({
+      externalId: usdExternalId,
+      lmTransactionId: lmIds[0],
+      telegramChatId: chatId,
+      telegramMessageId: messageId,
+      amount: usdAmount,
+      currency: "USD",
+      payee,
+      categoryName: transferCat?.name,
+      assetName: usdAccount.name,
+      date,
+      fxRate: rate,
+      fxSource: "user",
+    });
+
+    const arsLocalId = this.db.saveTransaction({
+      externalId: arsExternalId,
+      lmTransactionId: lmIds[1],
+      telegramChatId: chatId,
+      telegramMessageId: messageId,
+      amount: -arsAmount,
+      currency: "ARS",
+      payee,
+      categoryName: transferCat?.name,
+      assetName: arsAccount.name,
+      date,
+      fxRate: rate,
+      fxSource: "user",
+    });
+
+    this.db.setSplitGroupId([usdLocalId, arsLocalId], usdLocalId);
+
+    logger.info("FX sell created", { usdAmount, arsAmount, rate, groupId: usdLocalId });
+
+    return {
+      usdAmount,
+      arsAmount,
+      rate,
+      usdAccountName: usdAccount.name,
+      arsAccountName: arsAccount.name,
+      splitGroupId: usdLocalId,
     };
   }
 
