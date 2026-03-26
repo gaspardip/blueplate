@@ -299,10 +299,10 @@ export function createCommandHandlers(
       const args = text.replace(/^\/transfer\s*/, "").trim();
 
       // Parse: /transfer 1000000 cash ars → banco [ayer]
-      // Separator: →, ->, to, a
-      const match = args.match(/^([\d.,kKmM]+)\s+(.+?)\s*(?:→|->|to|a)\s*(.+)$/);
+      // Separator: →, ->, to, a (word-bounded to avoid matching inside "ars", "cash", etc.)
+      const match = args.match(/^([\d.,kKmM]+)\s+(.+?)\s*(?:→|->|\bto\b|\ba\b)\s*(.+)$/);
       if (!match) {
-        await ctx.reply("Usage: /transfer <amount> <from> → <to> [date]\nExample: /transfer 1000000 cash ars → banco\nExample: /transfer 500k mp → banco ayer");
+        await ctx.reply("Usage: /transfer <amount> <from> → <to> [date]\nSeparators: →, ->, to, a\nExamples:\n  /transfer 990k cash ars → banco\n  /transfer 500k mp a banco ayer");
         return;
       }
 
