@@ -5,11 +5,19 @@ export function stripEmoji(s: string): string {
 }
 
 export function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localDateStr(new Date());
+}
+
+/** Format a Date as YYYY-MM-DD in the local timezone (not UTC). */
+export function localDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export function yearMonthStr(): string {
-  return new Date().toISOString().slice(0, 7);
+  return todayStr().slice(0, 7);
 }
 
 const DATE_KEYWORDS: Record<string, () => string> = {
@@ -18,17 +26,17 @@ const DATE_KEYWORDS: Record<string, () => string> = {
   ayer: () => {
     const d = new Date();
     d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
+    return localDateStr(d);
   },
   yesterday: () => {
     const d = new Date();
     d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
+    return localDateStr(d);
   },
   anteayer: () => {
     const d = new Date();
     d.setDate(d.getDate() - 2);
-    return d.toISOString().slice(0, 10);
+    return localDateStr(d);
   },
 };
 
@@ -48,7 +56,7 @@ export function weekRangeStr(): { weekStart: string; weekEnd: string } {
   const monday = new Date(now);
   monday.setDate(now.getDate() - diffToMonday);
   return {
-    weekStart: monday.toISOString().slice(0, 10),
-    weekEnd: now.toISOString().slice(0, 10),
+    weekStart: localDateStr(monday),
+    weekEnd: localDateStr(now),
   };
 }

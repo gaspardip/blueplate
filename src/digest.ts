@@ -2,7 +2,7 @@ import type { Bot } from "grammy";
 import { logger } from "./logger.js";
 import type { BlueplateDatabase } from "./storage/database.js";
 import { formatDaySummary, formatWeeklySummary } from "./bot/formatters.js";
-import { todayStr } from "./utils.js";
+import { localDateStr, todayStr } from "./utils.js";
 
 export class DailyDigest {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -69,11 +69,10 @@ export class DailyDigest {
   }
 
   private async sendWeekly(): Promise<void> {
-    const now = new Date();
-    const weekEnd = now.toISOString().slice(0, 10);
-    const weekStart = new Date(now);
+    const weekEnd = todayStr();
+    const weekStart = new Date();
     weekStart.setDate(weekStart.getDate() - 6);
-    const weekStartStr = weekStart.toISOString().slice(0, 10);
+    const weekStartStr = localDateStr(weekStart);
 
     const prevEnd = new Date(weekStart);
     prevEnd.setDate(prevEnd.getDate() - 1);
@@ -85,8 +84,8 @@ export class DailyDigest {
         const rows = this.db.getTransactionsForDateRange(chatId, weekStartStr, weekEnd);
         const prevRows = this.db.getTransactionsForDateRange(
           chatId,
-          prevStart.toISOString().slice(0, 10),
-          prevEnd.toISOString().slice(0, 10)
+          localDateStr(prevStart),
+          localDateStr(prevEnd)
         );
         const summary = formatWeeklySummary(rows, weekStartStr, weekEnd, prevRows);
         await this.bot.api.sendMessage(chatId, summary);
