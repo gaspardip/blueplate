@@ -150,6 +150,18 @@ describe("formatDaySummary", () => {
     expect(result).toContain("ARS");
     expect(result).toContain("14,000");
   });
+
+  it("excludes transfers from totals (regression: transfers inflated daily summary)", () => {
+    const rows = [
+      makeRow({ payee: "starbucks", amount: 10.00 }),
+      makeRow({ payee: "Transfer Cash ARS → Banco", amount: 990000, category_name: "🔄 Payment, Transfer" }),
+      makeRow({ payee: "Transfer Cash ARS → Banco", amount: -990000, category_name: "🔄 Payment, Transfer" }),
+    ];
+    const result = formatDaySummary(rows, "2026-03-28");
+    expect(result).toContain("1 transactions");
+    expect(result).toContain("$10.00");
+    expect(result).not.toContain("Transfer");
+  });
 });
 
 describe("formatMonthSummary", () => {
@@ -261,6 +273,30 @@ describe("formatWeeklySummary", () => {
     const prevRows = [makeRow({ amount: 100 })];
     const result = formatWeeklySummary(rows, "2026-03-17", "2026-03-23", prevRows);
     expect(result).toContain("↓");
+  });
+
+  it("excludes transfers from totals (regression: -$3.5M weekly total)", () => {
+    const rows = [
+      makeRow({ payee: "starbucks", amount: 25.00, category_name: "Coffee" }),
+      makeRow({ payee: "FX Sell USD→ARS", amount: 1500, category_name: "🔄 Payment, Transfer" }),
+      makeRow({ payee: "FX Sell USD→ARS", amount: -2085000, category_name: "🔄 Payment, Transfer" }),
+      makeRow({ payee: "Transfer Cash ARS → Banco", amount: 990000, category_name: "🔄 Payment, Transfer" }),
+      makeRow({ payee: "Transfer Cash ARS → Banco", amount: -990000, category_name: "🔄 Payment, Transfer" }),
+    ];
+    const result = formatWeeklySummary(rows, "2026-03-23", "2026-03-29");
+    expect(result).toContain("1 transactions, $25.00 USD total");
+    expect(result).not.toContain("Payment, Transfer");
+    expect(result).not.toContain("FX Sell");
+  });
+
+  it("excludes transfers from week-over-week comparison", () => {
+    const rows = [makeRow({ amount: 100 })];
+    const prevRows = [
+      makeRow({ amount: 80 }),
+      makeRow({ payee: "Transfer", amount: 500000, category_name: "🔄 Payment, Transfer" }),
+    ];
+    const result = formatWeeklySummary(rows, "2026-03-17", "2026-03-23", prevRows);
+    expect(result).toContain("vs last week: $80.00");
   });
 });
 

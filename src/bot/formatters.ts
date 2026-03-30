@@ -68,12 +68,13 @@ export function formatUndone(payee: string, amount: number, currency: string): s
 }
 
 export function formatDaySummary(rows: TransactionRow[], date: string): string {
-  if (rows.length === 0) {
+  const expenses = rows.filter((r) => !isTransfer(r));
+  if (expenses.length === 0) {
     return `No transactions for ${date}.`;
   }
 
   let total = 0;
-  const lines = rows.map((r) => {
+  const lines = expenses.map((r) => {
     total += r.amount;
     let line = `  ${capitalize(r.payee)} $${r.amount.toFixed(2)} ${r.currency}`;
     if (r.original_amount != null && r.original_currency) {
@@ -85,20 +86,21 @@ export function formatDaySummary(rows: TransactionRow[], date: string): string {
     return line;
   });
 
-  return [`${date} (${rows.length} transactions, $${total.toFixed(2)} USD):`, ...lines].join(
+  return [`${date} (${expenses.length} transactions, $${total.toFixed(2)} USD):`, ...lines].join(
     "\n"
   );
 }
 
 export function formatMonthSummary(rows: TransactionRow[], yearMonth: string): string {
-  if (rows.length === 0) {
+  const expenses = rows.filter((r) => !isTransfer(r));
+  if (expenses.length === 0) {
     return `No transactions for ${yearMonth}.`;
   }
 
   let total = 0;
   const byCategory = new Map<string, number>();
 
-  for (const r of rows) {
+  for (const r of expenses) {
     total += r.amount;
     const cat = r.category_name ?? "Uncategorized";
     byCategory.set(cat, (byCategory.get(cat) ?? 0) + r.amount);
@@ -109,7 +111,7 @@ export function formatMonthSummary(rows: TransactionRow[], yearMonth: string): s
     .map(([cat, amt]) => `  ${cat}: $${amt.toFixed(2)}`);
 
   return [
-    `${yearMonth} — ${rows.length} transactions, $${total.toFixed(2)} USD total:`,
+    `${yearMonth} — ${expenses.length} transactions, $${total.toFixed(2)} USD total:`,
     ...catLines,
   ].join("\n");
 }
@@ -150,13 +152,14 @@ export function formatWeeklySummary(
   weekEnd: string,
   prevRows?: TransactionRow[]
 ): string {
-  if (rows.length === 0) return `No expenses this week (${weekStart} – ${weekEnd}).`;
+  const expenses = rows.filter((r) => !isTransfer(r));
+  if (expenses.length === 0) return `No expenses this week (${weekStart} – ${weekEnd}).`;
 
   let total = 0;
   const byCategory = new Map<string, number>();
   const byPayee = new Map<string, number>();
 
-  for (const r of rows) {
+  for (const r of expenses) {
     total += r.amount;
     const cat = r.category_name ?? "Uncategorized";
     byCategory.set(cat, (byCategory.get(cat) ?? 0) + r.amount);
@@ -174,7 +177,7 @@ export function formatWeeklySummary(
 
   const lines = [
     `Week ${weekStart} – ${weekEnd}`,
-    `${rows.length} transactions, $${total.toFixed(2)} USD total`,
+    `${expenses.length} transactions, $${total.toFixed(2)} USD total`,
     "",
     "By category:",
     ...catLines,
@@ -184,11 +187,14 @@ export function formatWeeklySummary(
   ];
 
   if (prevRows && prevRows.length > 0) {
-    const prevTotal = prevRows.reduce((s, r) => s + r.amount, 0);
-    const diff = total - prevTotal;
-    const pct = prevTotal > 0 ? ((diff / prevTotal) * 100).toFixed(0) : "—";
-    const arrow = diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
-    lines.push("", `vs last week: $${prevTotal.toFixed(2)} (${arrow} ${pct}%)`);
+    const prevExpenses = prevRows.filter((r) => !isTransfer(r));
+    const prevTotal = prevExpenses.reduce((s, r) => s + r.amount, 0);
+    if (prevTotal > 0) {
+      const diff = total - prevTotal;
+      const pct = ((diff / prevTotal) * 100).toFixed(0);
+      const arrow = diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
+      lines.push("", `vs last week: $${prevTotal.toFixed(2)} (${arrow} ${pct}%)`);
+    }
   }
 
   return lines.join("\n");
@@ -349,6 +355,10 @@ export function formatPayeeBreakdown(rows: TransactionRow[], yearMonth: string, 
     `${yearMonth} top payees (${rows.length} tx, $${total.toFixed(2)} total):`,
     ...lines,
   ].join("\n");
+}
+
+function isTransfer(r: TransactionRow): boolean {
+  return r.category_name?.includes("Payment, Transfer") === true;
 }
 
 function capitalize(s: string): string {
