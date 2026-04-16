@@ -261,21 +261,23 @@ export function createBot(
 
   async function presentImportPreview(
     ctx: Context,
+    chatId: number,
+    messageId: number,
     statementResult: StatementResult,
-    sourceLabel: "PDF" | "image",
+    emptyMessage: string,
   ): Promise<void> {
     if (statementResult.transactions.length === 0) {
-      await ctx.reply(`No transactions found in this ${sourceLabel}.`);
+      await ctx.reply(emptyMessage);
       return;
     }
-    const chatId = ctx.chat!.id;
-    const messageId = ctx.message!.message_id;
-    const usdPreview = await orchestrator.previewImport(statementResult.transactions);
+    const [usdPreview, accounts] = await Promise.all([
+      orchestrator.previewImport(statementResult.transactions),
+      lm.getAccounts(),
+    ]);
     const importKey = `${chatId}:${messageId}`;
     pendingImports.set(importKey, { result: statementResult, usdPreview, createdAt: Date.now() });
 
     const summary = formatImportSummary(statementResult.transactions, usdPreview);
-    const accounts = await lm.getAccounts();
     const keyboard = buildImportKeyboard(importKey, accounts);
     await ctx.reply(summary + "\n\nSelect account:", { reply_markup: keyboard });
   }
@@ -304,8 +306,10 @@ export function createBot(
       await ctx.reply(`${isPdf ? "PDF" : "Image"} too large (max 5MB).`);
       return;
     }
+    const label = isPdf ? "PDF" : "image";
 
     const chatId = ctx.chat.id;
+    const messageId = ctx.message.message_id;
     await ctx.replyWithChatAction("typing");
 
     let statementResult: StatementResult;
@@ -322,12 +326,12 @@ export function createBot(
         await ctx.reply(error.message);
         return;
       }
-      logger.error(`${isPdf ? "PDF" : "Image"} processing failed`, { chatId, error: String(error) });
+      logger.error(`${label} processing failed`, { chatId, error: String(error) });
       await ctx.reply("Couldn't download the file. Try again.");
       return;
     }
 
-    await presentImportPreview(ctx, statementResult, isPdf ? "PDF" : "image");
+    await presentImportPreview(ctx, chatId, messageId, statementResult, `No transactions found in this ${label}.`);
   });
 
   // Compressed photos → vision → import
@@ -353,6 +357,7 @@ export function createBot(
     }
 
     const chatId = ctx.chat.id;
+    const messageId = ctx.message.message_id;
     await ctx.replyWithChatAction("typing");
 
     let statementResult: StatementResult;
@@ -369,7 +374,7 @@ export function createBot(
       return;
     }
 
-    await presentImportPreview(ctx, statementResult, "image");
+    await presentImportPreview(ctx, chatId, messageId, statementResult, "No transactions found in this image.");
   });
 
   // Voice messages → transcribe → process as expense

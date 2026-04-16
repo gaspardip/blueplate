@@ -15,7 +15,7 @@ export interface StatementResult {
   closeDate?: string; // YYYY-MM-DD — statement close/cutoff date
 }
 
-const transactionSchema = z.object({
+export const statementTransactionSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   payee: z.string().min(1),
   amount: z.number(),
@@ -23,8 +23,20 @@ const transactionSchema = z.object({
   category_hint: z.string().optional().nullable(),
 });
 
+export function toStatementTransaction(
+  t: z.infer<typeof statementTransactionSchema>,
+): StatementTransaction {
+  return {
+    date: t.date,
+    payee: t.payee,
+    amount: t.amount,
+    currency: t.currency,
+    categoryHint: t.category_hint ?? undefined,
+  };
+}
+
 const responseSchema = z.object({
-  transactions: z.array(transactionSchema).min(1),
+  transactions: z.array(statementTransactionSchema).min(1),
   close_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
 });
 
@@ -124,13 +136,7 @@ export async function structureStatement(
     closeDate: validated.data.close_date ?? null,
   });
   return {
-    transactions: validated.data.transactions.map((t) => ({
-      date: t.date,
-      payee: t.payee,
-      amount: t.amount,
-      currency: t.currency,
-      categoryHint: t.category_hint ?? undefined,
-    })),
+    transactions: validated.data.transactions.map(toStatementTransaction),
     closeDate: validated.data.close_date ?? undefined,
   };
 }

@@ -2,18 +2,10 @@ import { z } from "zod";
 import { BlueplateError } from "../errors.js";
 import { logger } from "../logger.js";
 import { todayStr } from "../utils.js";
-import type { StatementResult } from "../pdf/structure.js";
-
-const transactionSchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  payee: z.string().min(1),
-  amount: z.number(),
-  currency: z.string().optional(),
-  category_hint: z.string().optional().nullable(),
-});
+import { statementTransactionSchema, toStatementTransaction, type StatementResult } from "../pdf/structure.js";
 
 const responseSchema = z.object({
-  transactions: z.array(transactionSchema).min(1),
+  transactions: z.array(statementTransactionSchema).min(1),
 });
 
 function systemPrompt(today: string): string {
@@ -112,13 +104,5 @@ export async function structureImage(
   }
 
   logger.info("Image structured", { transactionCount: validated.data.transactions.length });
-  return {
-    transactions: validated.data.transactions.map((t) => ({
-      date: t.date,
-      payee: t.payee,
-      amount: t.amount,
-      currency: t.currency,
-      categoryHint: t.category_hint ?? undefined,
-    })),
-  };
+  return { transactions: validated.data.transactions.map(toStatementTransaction) };
 }

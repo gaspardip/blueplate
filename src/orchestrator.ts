@@ -74,7 +74,6 @@ interface PreparedTx {
   normalizedPayee: string;
   category?: { id: number; name: string };
   tagIds: number[];
-  tagNames: string[];
 }
 
 interface FXResult {
@@ -496,11 +495,13 @@ export class Orchestrator {
     // Resolve a fallback FX rate (current) in case no historical rate is cached.
     const fallbackFx = await this.resolveImportFxRate();
 
-    // Fetch categories + tags once for per-transaction category inference — only
-    // when at least one transaction carries a category hint (avoids extra LM calls
-    // for text-only PDF imports that never carry hints).
+    // Skip categories/tags fetch when no transaction carries a hint (PDF path).
     const needsCategories = transactions.some((t) => t.categoryHint != null);
-    const ctx = needsCategories ? await this.getResolutionContext() : null;
+    const hints = needsCategories
+      ? await Promise.all([this.lm.getCategories(), this.lm.getTags()])
+      : null;
+    const categoriesCache = hints?.[0] ?? [];
+    const tagsCache = hints?.[1] ?? [];
 
     // Pre-compute FX results and filter out duplicates (same amount + date already logged manually)
     const prepared: PreparedTx[] = [];
@@ -538,22 +539,12 @@ export class Orchestrator {
         continue;
       }
 
-      const category = ctx && stx.categoryHint
-        ? this.resolveCategory(stx.categoryHint, ctx.categories) ?? undefined
+      const category = hints && stx.categoryHint
+        ? this.resolveCategory(stx.categoryHint, categoriesCache) ?? undefined
         : undefined;
-      const tagNames = ctx ? [...new Set(inferTagNames(category?.name))] : [];
-      const tagIds = ctx ? resolveTagIds(tagNames, ctx.tags) : [];
+      const tagIds = hints ? resolveTagIds(inferTagNames(category?.name), tagsCache) : [];
 
-      prepared.push({
-        stx,
-        globalIndex: i,
-        externalId,
-        fxResult,
-        normalizedPayee,
-        category,
-        tagIds,
-        tagNames,
-      });
+      prepared.push({ stx, globalIndex: i, externalId, fxResult, normalizedPayee, category, tagIds });
     }
 
     if (prepared.length === 0) {
@@ -584,7 +575,7 @@ export class Orchestrator {
           categoryName: p.category?.name,
           assetId,
           date: p.stx.date,
-          tags: p.tagNames,
+          tags: inferTagNames(p.category?.name),
           externalId: p.externalId,
         };
 
