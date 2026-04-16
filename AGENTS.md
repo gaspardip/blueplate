@@ -29,6 +29,7 @@ src/
 ├── parser/        # Text → structured expense (tokenizer, grammar, corrections)
 ├── orchestrator.ts # Pipeline: parse → resolve → FX → create in LM → save undo record
 ├── pdf/           # PDF import: extract text (unpdf) → structure (gpt-4o-mini)
+├── vision/        # Image import: base64 image → gpt-4o vision → structured transactions
 ├── lunchmoney/    # LM v2 API client, mapper, types
 ├── fx/            # Blue dollar FX: DolarAPI (live), ArgentinaDatos (historical)
 ├── storage/       # SQLite: undo records, caches, FX history, templates, aliases
@@ -44,7 +45,7 @@ src/
 
 ```
 Manual:  text/voice → parse → resolve category/asset/tags → FX convert → LM create → save undo
-Import:  PDF → extract text → LLM structure → preview → confirm → per-date FX → LM batch create
+Import:  PDF/image → extract text (unpdf) or vision (gpt-4o) → LLM structure → preview → confirm → per-date FX → LM batch create
 ```
 
 ## Key Docs
@@ -54,6 +55,7 @@ Import:  PDF → extract text → LLM structure → preview → confirm → per-
 | `docs/lunchmoney-v2.md` | v2 API contract: endpoints, request/response shapes, migration gotchas |
 | `docs/fx.md` | FX conversion logic: compra rate, historical lookup, hydration script |
 | `docs/pdf-import.md` | PDF import pipeline: extraction, LLM prompt, dedup, UX flow |
+| `docs/image-import.md` | Image/screenshot import: vision prompt, category inference, limits |
 | `docs/parser.md` | Parser internals: tokenizer, grammar, category aliases, account splits |
 
 ## Invariants

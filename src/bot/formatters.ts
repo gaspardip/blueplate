@@ -249,7 +249,7 @@ export function formatImportSummary(
     return `  ${t.date.slice(5)} ${t.payee} — ${formatNumber(Math.abs(t.amount))}`;
   });
 
-  const header = [`PDF Import: ${transactions.length} transactions`];
+  const header = [`Import: ${transactions.length} transactions`];
 
   if (usdPreview) {
     const usdTotal = usdPreview.reduce((s, u) => s + Math.abs(u.usdAmount), 0);

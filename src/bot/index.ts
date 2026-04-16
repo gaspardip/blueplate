@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, type Context } from "grammy";
 import type { Config } from "../config.js";
 import { BlueplateError, ParseError } from "../errors.js";
 import { logger } from "../logger.js";
@@ -18,6 +18,7 @@ import {
 import { authGuard, errorBoundary, requestLogger } from "./middleware.js";
 import { transcribe } from "../transcription.js";
 import { extractPdfText, structureStatement } from "../pdf/index.js";
+import { structureImage } from "../vision/index.js";
 import { isQuestion, askQuestion } from "./question.js";
 import { yearMonthStr } from "../utils.js";
 import type { StatementResult } from "../pdf/index.js";
@@ -258,51 +259,17 @@ export function createBot(
     }
   });
 
-  // PDF documents → extract text → structure → import
-  bot.on("message:document", async (ctx) => {
-    const doc = ctx.message.document;
-    if (!doc) return;
-
-    if (doc.mime_type !== "application/pdf") {
-      await ctx.reply("Send a PDF file. Photos aren't supported yet.");
-      return;
-    }
-
-    if (!config.openaiApiKey) {
-      await ctx.reply("PDF import requires OpenAI API key.");
-      return;
-    }
-
-    if (doc.file_size && doc.file_size > 5 * 1024 * 1024) {
-      await ctx.reply("PDF too large (max 5MB).");
-      return;
-    }
-
-    const chatId = ctx.chat.id;
-    const messageId = ctx.message.message_id;
-
-    await ctx.replyWithChatAction("typing");
-
-    let statementResult: StatementResult;
-    try {
-      const buffer = await downloadTelegramFile(ctx, config.telegramBotToken);
-      const text = await extractPdfText(buffer);
-      statementResult = await structureStatement(text, config.openaiApiKey);
-    } catch (error) {
-      if (error instanceof BlueplateError) {
-        await ctx.reply(error.message);
-        return;
-      }
-      logger.error("PDF processing failed", { chatId, error: String(error) });
-      await ctx.reply("Couldn't download the file. Try again.");
-      return;
-    }
-
+  async function presentImportPreview(
+    ctx: Context,
+    statementResult: StatementResult,
+    sourceLabel: "PDF" | "image",
+  ): Promise<void> {
     if (statementResult.transactions.length === 0) {
-      await ctx.reply("No transactions found in this PDF.");
+      await ctx.reply(`No transactions found in this ${sourceLabel}.`);
       return;
     }
-
+    const chatId = ctx.chat!.id;
+    const messageId = ctx.message!.message_id;
     const usdPreview = await orchestrator.previewImport(statementResult.transactions);
     const importKey = `${chatId}:${messageId}`;
     pendingImports.set(importKey, { result: statementResult, usdPreview, createdAt: Date.now() });
@@ -311,6 +278,98 @@ export function createBot(
     const accounts = await lm.getAccounts();
     const keyboard = buildImportKeyboard(importKey, accounts);
     await ctx.reply(summary + "\n\nSelect account:", { reply_markup: keyboard });
+  }
+
+  // PDF documents → extract text → structure → import.
+  // Also accepts image/* documents (uncompressed images sent as files) → vision → import.
+  bot.on("message:document", async (ctx) => {
+    const doc = ctx.message.document;
+    if (!doc) return;
+
+    const mime = doc.mime_type ?? "";
+    const isPdf = mime === "application/pdf";
+    const isImage = mime.startsWith("image/");
+
+    if (!isPdf && !isImage) {
+      await ctx.reply("Send a PDF or image file.");
+      return;
+    }
+
+    if (!config.openaiApiKey) {
+      await ctx.reply("Import requires OpenAI API key.");
+      return;
+    }
+
+    if (doc.file_size && doc.file_size > 5 * 1024 * 1024) {
+      await ctx.reply(`${isPdf ? "PDF" : "Image"} too large (max 5MB).`);
+      return;
+    }
+
+    const chatId = ctx.chat.id;
+    await ctx.replyWithChatAction("typing");
+
+    let statementResult: StatementResult;
+    try {
+      const buffer = await downloadTelegramFile(ctx, config.telegramBotToken);
+      if (isPdf) {
+        const text = await extractPdfText(buffer);
+        statementResult = await structureStatement(text, config.openaiApiKey);
+      } else {
+        statementResult = await structureImage(buffer, config.openaiApiKey, { mimeType: mime });
+      }
+    } catch (error) {
+      if (error instanceof BlueplateError) {
+        await ctx.reply(error.message);
+        return;
+      }
+      logger.error(`${isPdf ? "PDF" : "Image"} processing failed`, { chatId, error: String(error) });
+      await ctx.reply("Couldn't download the file. Try again.");
+      return;
+    }
+
+    await presentImportPreview(ctx, statementResult, isPdf ? "PDF" : "image");
+  });
+
+  // Compressed photos → vision → import
+  bot.on("message:photo", async (ctx) => {
+    const photos = ctx.message.photo;
+    if (!photos || photos.length === 0) return;
+
+    if (ctx.message.media_group_id) {
+      await ctx.reply("Send one photo at a time — albums aren't supported yet.");
+      return;
+    }
+
+    if (!config.openaiApiKey) {
+      await ctx.reply("Import requires OpenAI API key.");
+      return;
+    }
+
+    // Telegram returns photos sorted ascending by size; pick the largest.
+    const largest = photos[photos.length - 1];
+    if (largest.file_size && largest.file_size > 5 * 1024 * 1024) {
+      await ctx.reply("Image too large (max 5MB).");
+      return;
+    }
+
+    const chatId = ctx.chat.id;
+    await ctx.replyWithChatAction("typing");
+
+    let statementResult: StatementResult;
+    try {
+      const buffer = await downloadTelegramFile(ctx, config.telegramBotToken);
+      statementResult = await structureImage(buffer, config.openaiApiKey, { mimeType: "image/jpeg" });
+    } catch (error) {
+      if (error instanceof BlueplateError) {
+        await ctx.reply(error.message);
+        return;
+      }
+      logger.error("Photo processing failed", { chatId, error: String(error) });
+      await ctx.reply("Couldn't process the photo. Try again.");
+      return;
+    }
+
+    await presentImportPreview(ctx, statementResult, "image");
   });
 
   // Voice messages → transcribe → process as expense

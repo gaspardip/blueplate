@@ -72,6 +72,9 @@ interface PreparedTx {
   externalId: string;
   fxResult: FXResult;
   normalizedPayee: string;
+  category?: { id: number; name: string };
+  tagIds: number[];
+  tagNames: string[];
 }
 
 interface FXResult {
@@ -493,6 +496,12 @@ export class Orchestrator {
     // Resolve a fallback FX rate (current) in case no historical rate is cached.
     const fallbackFx = await this.resolveImportFxRate();
 
+    // Fetch categories + tags once for per-transaction category inference — only
+    // when at least one transaction carries a category hint (avoids extra LM calls
+    // for text-only PDF imports that never carry hints).
+    const needsCategories = transactions.some((t) => t.categoryHint != null);
+    const ctx = needsCategories ? await this.getResolutionContext() : null;
+
     // Pre-compute FX results and filter out duplicates (same amount + date already logged manually)
     const prepared: PreparedTx[] = [];
     let skipped = 0;
@@ -529,7 +538,22 @@ export class Orchestrator {
         continue;
       }
 
-      prepared.push({ stx, globalIndex: i, externalId, fxResult, normalizedPayee });
+      const category = ctx && stx.categoryHint
+        ? this.resolveCategory(stx.categoryHint, ctx.categories) ?? undefined
+        : undefined;
+      const tagNames = ctx ? [...new Set(inferTagNames(category?.name))] : [];
+      const tagIds = ctx ? resolveTagIds(tagNames, ctx.tags) : [];
+
+      prepared.push({
+        stx,
+        globalIndex: i,
+        externalId,
+        fxResult,
+        normalizedPayee,
+        category,
+        tagIds,
+        tagNames,
+      });
     }
 
     if (prepared.length === 0) {
@@ -556,8 +580,11 @@ export class Orchestrator {
           originalAmount: p.fxResult.originalAmount,
           originalCurrency: p.fxResult.originalCurrency,
           payee: p.normalizedPayee,
+          categoryId: p.category?.id,
+          categoryName: p.category?.name,
           assetId,
           date: p.stx.date,
+          tags: p.tagNames,
           externalId: p.externalId,
         };
 
@@ -565,6 +592,9 @@ export class Orchestrator {
         const payload = transactionToPayload(tx, metadata);
         payload.manual_account_id = assetId;
         payload.status = "unreviewed";
+        if (p.tagIds.length > 0) {
+          payload.tag_ids = p.tagIds;
+        }
         payloads.push(payload);
       }
 
@@ -582,6 +612,7 @@ export class Orchestrator {
           originalAmount: p.fxResult.originalAmount,
           originalCurrency: p.fxResult.originalCurrency,
           payee: p.normalizedPayee,
+          categoryName: p.category?.name,
           assetName,
           date: p.stx.date,
           fxRate: p.fxResult.fxRate,

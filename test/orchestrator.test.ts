@@ -583,6 +583,43 @@ describe("Orchestrator", () => {
       expect(result.created).toBe(0);
     });
 
+    it("resolves category per transaction from categoryHint", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "Carrefour", amount: 13800, currency: "ARS", categoryHint: "comida" },
+        { date: "2026-03-02", payee: "Netflix", amount: 4500, currency: "ARS", categoryHint: "transporte" },
+        { date: "2026-03-03", payee: "Unknown", amount: 1000, currency: "ARS", categoryHint: "does-not-match" },
+      ];
+
+      await orchestrator.processImport(transactions, 123, 900, 10, "Visa");
+
+      const r0 = db.getByExternalId("bp_import_123_900_0");
+      const r1 = db.getByExternalId("bp_import_123_900_1");
+      const r2 = db.getByExternalId("bp_import_123_900_2");
+      expect(r0!.category_name).toBe("Comida");
+      expect(r1!.category_name).toBe("Transporte");
+      expect(r2!.category_name).toBeNull();
+    });
+
+    it("leaves category_name null when no transaction has categoryHint", async () => {
+      setupImportFetch();
+      const fx = new FXService(db, 300);
+      const lm = new LunchMoneyService("test-key", db, 3600_000);
+      orchestrator = new Orchestrator(db, lm, fx, "ARS");
+
+      const transactions = [
+        { date: "2026-03-01", payee: "X", amount: 1000, currency: "ARS" },
+      ];
+
+      await orchestrator.processImport(transactions, 123, 901, 10, "Visa");
+      const r = db.getByExternalId("bp_import_123_901_0");
+      expect(r!.category_name).toBeNull();
+    });
+
     it("previewImport marks ARS as converted and USD as not", async () => {
       setupImportFetch();
       const fx = new FXService(db, 300);

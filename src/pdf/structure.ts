@@ -7,6 +7,7 @@ export interface StatementTransaction {
   payee: string;
   amount: number;  // positive = expense, negative = credit/payment
   currency?: string;
+  categoryHint?: string; // optional free-form category suggestion (fuzzy-matched downstream)
 }
 
 export interface StatementResult {
@@ -19,6 +20,7 @@ const transactionSchema = z.object({
   payee: z.string().min(1),
   amount: z.number(),
   currency: z.string().optional(),
+  category_hint: z.string().optional().nullable(),
 });
 
 const responseSchema = z.object({
@@ -122,7 +124,13 @@ export async function structureStatement(
     closeDate: validated.data.close_date ?? null,
   });
   return {
-    transactions: validated.data.transactions,
+    transactions: validated.data.transactions.map((t) => ({
+      date: t.date,
+      payee: t.payee,
+      amount: t.amount,
+      currency: t.currency,
+      categoryHint: t.category_hint ?? undefined,
+    })),
     closeDate: validated.data.close_date ?? undefined,
   };
 }
